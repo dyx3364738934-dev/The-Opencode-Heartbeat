@@ -225,50 +225,46 @@ def main():
 
     while True:
         try:
-            # 1. 检测 oc
+            # 1. 检测 oc 进程
             if not is_oc_running():
                 log("oc 不在线，启动...")
                 start_oc()
-                log(f"等待 {OC_STARTUP_WAIT}s 让 oc 启动...")
-                time.sleep(OC_STARTUP_WAIT)
+                # 轮询等待 oc 在线（最多 120s）
+                for i in range(24):
+                    time.sleep(5)
+                    if is_oc_running():
+                        log(f"oc 已在线（{i*5+5}s 后检测到）")
+                        break
+                else:
+                    log("oc 启动 120s 后仍不在线，等下一轮")
+                    time.sleep(CHECK_INTERVAL)
                 continue
 
-            # 2. oc 在线，找端口
-            port = find_oc_port()
-            if not port:
-                log("oc 在线但找不到监听端口，等下一轮")
-                time.sleep(CHECK_INTERVAL)
-                continue
-
-            # 3. 读密码文件
-            pwd_data = read_password_file()
-            if not pwd_data:
-                log(f"密码文件不可用，等 {CHECK_INTERVAL}s（furina-bootstrap plugin 应该会泄露）")
-                time.sleep(CHECK_INTERVAL)
-                continue
-
-            password = pwd_data["password"]
-            username = pwd_data.get("username", "opencode")
-
-            # 4. 验证 server
-            if not verify_server(port, password, username):
-                log(f"server 验证失败 (port={port})，密码可能过期")
-                # 删除旧密码文件，等 plugin 重新泄露
-                try:
-                    PASSWORD_FILE.unlink()
-                except Exception:
-                    pass
-                time.sleep(CHECK_INTERVAL)
-                continue
-
-            # 5. 检测 furina
+            # 2. oc 在线，检测 furina 心跳
             if is_furina_running():
                 # 一切正常，静默等待
                 time.sleep(CHECK_INTERVAL)
                 continue
 
-            # 6. furina 没跑，启动它
-            log("furina 未运行，启动...")
+            # 3. furina 没跑，先等插件启动它（插件在 oc 加载时会启动 furina）
+            log("furina 未检测到心跳，等插件启动（10s）...")
+            time.sleep(10)
+            if is_furina_running():
+                log("furina 已被插件启动")
+                time.sleep(CHECK_INTERVAL)
+                continue
+
+            # 4. 插件没启动 furina，兜底：读密码文件启动
+            log("插件未启动 furina，兜底启动...")
+            pwd_data = read_password_file()
+            if not pwd_data:
+                log("密码文件不可用，等 10s")
+                time.sleep(CHECK_INTERVAL)
+                continue
+
+            password = pwd_data["password"]
+            username = pwd_data.get("username", "opencode")
+            port = find_oc_port()
             start_furina(password, username, port)
             time.sleep(FURINA_STARTUP_WAIT)
 

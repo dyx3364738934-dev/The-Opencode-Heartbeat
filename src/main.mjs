@@ -208,14 +208,31 @@ function formatEventMessage(event) {
 // 启动
 // ============================================================
 
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function retry(fn, label, maxAttempts, intervalMs) {
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (i === 0) console.log(`[init] ${label} 未就绪: ${e.message}，等待重试...`);
+      await sleep(intervalMs);
+    }
+  }
+  throw new Error(`${label} 等待超时`);
+}
+
 async function main() {
-  // 1. 发现 oc server
-  console.log("\n[init] 发现 oc server...");
-  const server = await injector.discover();
+  // 1. 发现 oc server（等 oc server 就绪，最多 120s）
+  console.log("\n[init] 等待 oc server 就绪...");
+  const server = await retry(() => injector.discover(), "oc server", 60, 2000);
   console.log(`  server: ${server.base}`);
 
-  // 2. 解析 session
-  const sid = await injector.resolveSession();
+  // 2. 解析 session（等 session 创建，最多 60s）
+  console.log("[init] 等待 session 就绪...");
+  const sid = await retry(() => injector.resolveSession(), "session", 30, 2000);
   console.log(`  session: ${sid}`);
 
   // 3. 启动感知器
