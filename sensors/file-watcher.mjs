@@ -70,6 +70,12 @@ export class FileWatcher extends BaseSensor {
   }
 
   _handleEvent(filePath, event, stats) {
+    // 手动排除 furina 自身目录（防止心跳/配置自循环）
+    const normalized = filePath.replace(/\\/g, "/");
+    if (/[\/]logs[\/]/.test(normalized) || /[\/]config[\/]/.test(normalized)) {
+      return;
+    }
+
     // 去抖：同一文件在 debounceMs 内的多次事件合并
     if (this.pendingEvents.has(filePath)) {
       clearTimeout(this.pendingEvents.get(filePath));

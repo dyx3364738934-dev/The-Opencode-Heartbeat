@@ -23,6 +23,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -80,18 +81,28 @@ def is_oc_running():
         return False
 
 
+def alert_start_oc():
+    """弹消息框提醒用户手动启动 oc"""
+    def show():
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            "oc 自动启动失败。\n请手动启动 opencode 桌面版。\n\n看门狗会在 oc 在线后自动继续。",
+            "furina 看门狗",
+            0x40 | 0x10  # MB_ICONINFORMATION | MB_TOPMOST
+        )
+    threading.Thread(target=show, daemon=True).start()
+
+
 def start_oc():
-    """启动 oc 桌面版"""
+    """启动 oc 桌面版（纯继承，不加 creationflags）"""
     for path in OC_EXE_PATHS:
         if path.exists():
             log(f"启动 oc: {path}")
             try:
-                # CREATE_NEW_PROCESS_GROUP (0x00000200) 比 DETACHED_PROCESS 更稳定
-                # 不用 DETACHED_PROCESS 因为它可能导致 Electron 应用 0xc0000005
                 subprocess.Popen(
                     [str(path)],
-                    creationflags=0x00000200,  # CREATE_NEW_PROCESS_GROUP
-                    close_fds=True
+                    cwd=str(path.parent),  # 在 oc 安装目录启动
                 )
                 log("oc 启动命令已发送")
                 return True
@@ -229,15 +240,19 @@ def main():
             if not is_oc_running():
                 log("oc 不在线，启动...")
                 start_oc()
-                # 轮询等待 oc 在线（最多 120s）
-                for i in range(24):
+                # 轮询等待 oc 在线（最多 30s）
+                oc_started = False
+                for i in range(6):
                     time.sleep(5)
                     if is_oc_running():
                         log(f"oc 已在线（{i*5+5}s 后检测到）")
+                        oc_started = True
                         break
-                else:
-                    log("oc 启动 120s 后仍不在线，等下一轮")
-                    time.sleep(CHECK_INTERVAL)
+                if not oc_started:
+                    # 30s 后 oc 仍不在线，弹消息框提醒用户
+                    log("oc 30s 后仍不在线，弹消息框提醒用户手动启动")
+                    alert_start_oc()
+                    # 继续轮询等待用户手动启动（每 10s 检测一次）
                 continue
 
             # 2. oc 在线，检测 furina 心跳
