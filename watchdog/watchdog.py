@@ -86,10 +86,11 @@ def start_oc():
         if path.exists():
             log(f"启动 oc: {path}")
             try:
-                # 用 subprocess 启动，不等待
+                # CREATE_NEW_PROCESS_GROUP (0x00000200) 比 DETACHED_PROCESS 更稳定
+                # 不用 DETACHED_PROCESS 因为它可能导致 Electron 应用 0xc0000005
                 subprocess.Popen(
                     [str(path)],
-                    creationflags=0x00000008,  # DETACHED_PROCESS
+                    creationflags=0x00000200,  # CREATE_NEW_PROCESS_GROUP
                     close_fds=True
                 )
                 log("oc 启动命令已发送")
@@ -201,7 +202,7 @@ def start_furina(password, username="opencode", port=None):
             ["node", str(entry), "--watch", watch_path],
             cwd=str(FURINA_ROOT),
             env=env,
-            creationflags=0x00000008,  # DETACHED_PROCESS
+            creationflags=0x00000200,  # CREATE_NEW_PROCESS_GROUP
             close_fds=True
         )
         log("furina 启动命令已发送")
