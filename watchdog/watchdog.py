@@ -69,13 +69,20 @@ def log(msg):
 # ============================================================
 
 def is_oc_running():
-    """检测 oc 桌面版进程是否在任务管理器里"""
+    """检测 oc 桌面版进程是否在线 AND 有监听端口（防 WER 残留误判）"""
     try:
         result = subprocess.run(
             ["tasklist", "/FI", "IMAGENAME eq OpenCode.exe", "/FO", "CSV", "/NH"],
             capture_output=True, text=True, timeout=5, creationflags=0x08000000
         )
-        return "OpenCode.exe" in result.stdout
+        if "OpenCode.exe" not in result.stdout:
+            return False
+        # 进程在，但还要检测有没有监听端口
+        # 0xc0000005 崩溃的进程会残留 in tasklist 但没有监听端口
+        port = find_oc_port()
+        if port:
+            return True
+        return False
     except Exception as e:
         log(f"tasklist 失败: {e}")
         return False
@@ -95,16 +102,16 @@ def alert_start_oc():
 
 
 def start_oc():
-    """启动 oc 桌面版（纯继承，不加 creationflags）"""
+    """启动 oc 桌面版（--no-sandbox 绕过 Electron sandbox 0xc0000005）"""
     for path in OC_EXE_PATHS:
         if path.exists():
             log(f"启动 oc: {path}")
             try:
                 subprocess.Popen(
-                    [str(path)],
-                    cwd=str(path.parent),  # 在 oc 安装目录启动
+                    [str(path), "--no-sandbox"],
+                    cwd=str(path.parent),
                 )
-                log("oc 启动命令已发送")
+                log("oc 启动命令已发送（--no-sandbox）")
                 return True
             except Exception as e:
                 log(f"oc 启动失败: {e}")
