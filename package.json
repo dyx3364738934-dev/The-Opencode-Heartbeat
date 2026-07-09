@@ -1,0 +1,23 @@
+{
+  "name": "furina",
+  "version": "0.1.0-beta",
+  "description": "opencode 自治感知-注入-记忆循环框架",
+  "type": "module",
+  "main": "src/main.mjs",
+  "bin": {
+    "furina": "src/main.mjs",
+    "furina-watchdog": "watchdog/watchdog.mjs"
+  },
+  "scripts": {
+    "start": "node src/main.mjs",
+    "watchdog": "node watchdog/watchdog.mjs",
+    "test": "node tests/test-e2e.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3"
+  },
+  "license": "MIT"
+}

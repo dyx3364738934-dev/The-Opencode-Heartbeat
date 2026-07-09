@@ -1,0 +1,7 @@
+node_modules/
+logs/
+watch-test/
+*.log
+*.err
+.DS_Store
+Thumbs.db

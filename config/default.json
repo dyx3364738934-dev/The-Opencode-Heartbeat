@@ -1,0 +1,37 @@
+{
+  "eventQueue": {
+    "maxBurst": 10,
+    "refillRate": 5,
+    "hourlyLimit": 200,
+    "debounceMs": 500
+  },
+  "injector": {
+    "sessionId": null,
+    "pollIntervalMs": 2000,
+    "pollTimeoutMs": 180000,
+    "stableThreshold": 3
+  },
+  "memory": {
+    "maxMessages": 40,
+    "maxTokens": 30000,
+    "charsPerToken": 2.5
+  },
+  "watchdog": {
+    "intervalMs": 5000,
+    "timeoutMs": 30000,
+    "maxRestart": 10,
+    "cooldownMs": 60000
+  },
+  "sensors": {
+    "fileWatcher": {
+      "paths": ["."],
+      "ignore": [
+        "**/node_modules/**",
+        "**/.git/**",
+        "**/logs/**",
+        "**/*.log"
+      ],
+      "debounceMs": 1000
+    }
+  }
+}
