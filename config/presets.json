@@ -1,0 +1,33 @@
+{
+  "mode": "observe",
+  "idleThresholdMs": 300000,
+  "selfTalkPrompts": [
+    "继续上一步的思考，看看有没有遗漏",
+    "总结一下刚才做了什么，接下来做什么",
+    "检查一下当前任务有没有边界情况没处理"
+  ],
+  "findWorkPrompts": [
+    "检查 watch 目录有没有新文件变化",
+    "看看 onlyoc 当前文档状态，有没有需要处理的",
+    "回顾最近的工作，有没有可以优化的地方"
+  ],
+  "healthCheck": {
+    "staleStateMs": 120000,
+    "pokeMessages": [
+      "你还在吗？如果卡住了请回复 [furina] 卡住了",
+      "尝试重新聚焦：请总结当前任务状态和下一步计划"
+    ],
+    "pokeIntervalMs": 60000,
+    "maxPokeRounds": 2,
+    "restartRecoveryMs": 30000
+  },
+  "observe": {
+    "interveneKeywords": [
+      "furina",
+      "芙宁娜",
+      "help",
+      "救命"
+    ],
+    "interveneMessage": "[furina] 检测到呼叫，我在线，有什么需要？"
+  }
+}

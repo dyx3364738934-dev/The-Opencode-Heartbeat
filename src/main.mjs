@@ -53,6 +53,9 @@ import { Injector } from "./injector.mjs";
 import { Memory } from "./memory.mjs";
 import { FileWatcher } from "../sensors/file-watcher.mjs";
 import { ControlChannel } from "./control-channel.mjs";
+import { Presets } from "./presets.mjs";
+import { HealthChecker } from "./health-checker.mjs";
+import { ModeManager } from "./mode-manager.mjs";
 
 // ============================================================
 // 初始化各分区
@@ -84,6 +87,27 @@ const memory = new Memory(injector, {
   maxTokens: 30000,
 });
 
+// 预设系统
+const presets = new Presets();
+console.log(`  预设: 模式=${presets.get("mode")}, 空闲阈值=${presets.get("idleThresholdMs") / 1000}s`);
+
+// 健康检测器
+const healthChecker = new HealthChecker(injector, presets, {
+  onIdle: null, // 会被 ModeManager 接管
+  onStale: (round, msg) => console.log(`[main] 戳醒第${round + 1}轮: ${msg}`),
+  onDead: (reason) => {
+    console.error(`[main] OC 判定死亡 (${reason})，触发看门狗重启`);
+    // 写一个特殊心跳让看门狗知道需要重启 oc
+    try {
+      writeFileSync(join(LOGS_DIR, "oc-dead.flag"), JSON.stringify({ reason, ts: Date.now() }));
+    } catch {}
+  },
+  onRecover: () => console.log("[main] OC 恢复响应"),
+});
+
+// 模式管理器
+const modeManager = new ModeManager(injector, presets, healthChecker);
+
 // 感知层：文件 watcher（首个感知器）
 const sensors = [];
 if (watchPaths.length > 0) {
@@ -108,6 +132,16 @@ function writeHeartbeat() {
     stats: {
       queue: queue.getStats(),
       memory: memory.getStats(),
+      mode: modeManager.getStats(),
+      presets: {
+        mode: presets.get("mode"),
+        idleThresholdMs: presets.get("idleThresholdMs"),
+      },
+      health: {
+        tracking: healthChecker.tracking,
+        lastState: healthChecker.lastState,
+        pokeRound: healthChecker.pokeRound,
+      },
     },
   };
   try {
@@ -190,12 +224,15 @@ async function main() {
     await sensor.start();
   }
 
-  // 3.5 启动控制通道（运行时热切换 session / 手动注入 / 查看状态）
+  // 3.5 启动控制通道（运行时热切换 session / 手动注入 / 查看状态 / 预设管理）
   const control = new ControlChannel({
     injector,
     queue,
     memory,
     sensors,
+    presets,
+    modeManager,
+    healthChecker,
     onAddWatch: (paths) => {
       // 动态添加文件监听
       const fw = new FileWatcher(queue, { paths, debounceMs: 1000 });

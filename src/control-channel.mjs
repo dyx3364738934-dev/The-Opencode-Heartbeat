@@ -22,11 +22,14 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export class ControlChannel {
-  constructor({ injector, queue, memory, sensors, onStatus, onAddWatch }) {
+  constructor({ injector, queue, memory, sensors, presets, modeManager, healthChecker, onStatus, onAddWatch }) {
     this.injector = injector;
     this.queue = queue;
     this.memory = memory;
     this.sensors = sensors;
+    this.presets = presets;
+    this.modeManager = modeManager;
+    this.healthChecker = healthChecker;
     this.onStatus = onStatus || (() => {});
     this.onAddWatch = onAddWatch || (() => {});
     this.controlFile = join(__dirname, "..", "control.json");
@@ -135,6 +138,68 @@ export class ControlChannel {
         }
         this.onAddWatch(cmd.paths);
         console.log(`[control] 添加监听路径: ${cmd.paths.join(", ")}`);
+        break;
+      }
+
+      case "set-mode": {
+        // set-mode: self-talk | find-work | observe
+        if (!cmd.mode) {
+          console.warn("[control] set-mode 需要 mode (self-talk/find-work/observe)");
+          return;
+        }
+        const ok = this.modeManager.setMode(cmd.mode);
+        console.log(`[control] set-mode ${cmd.mode}: ${ok ? "成功" : "失败"}`);
+        break;
+      }
+
+      case "set-preset": {
+        // set-preset: 修改任意预设值
+        // { cmd: "set-preset", key: "idleThresholdMs", value: 600000 }
+        // { cmd: "set-preset", key: "healthCheck.staleStateMs", value: 180000 }
+        if (!cmd.key) {
+          console.warn("[control] set-preset 需要 key");
+          return;
+        }
+        const ok = this.presets.set(cmd.key, cmd.value);
+        console.log(`[control] set-preset ${cmd.key}=${cmd.value}: ${ok ? "成功" : "失败（key不存在）"}`);
+        break;
+      }
+
+      case "add-prompt": {
+        // add-prompt: 往预设列表加一条
+        // { cmd: "add-prompt", list: "selfTalkPrompts", text: "检查一下日志" }
+        if (!cmd.list || !cmd.text) {
+          console.warn("[control] add-prompt 需要 list 和 text");
+          return;
+        }
+        const ok = this.presets.addPrompt(cmd.list, cmd.text);
+        console.log(`[control] add-prompt to ${cmd.list}: ${ok ? "成功" : "失败（list不存在）"}`);
+        break;
+      }
+
+      case "remove-prompt": {
+        // remove-prompt: 删除指定索引的预设
+        if (cmd.index === undefined || !cmd.list) {
+          console.warn("[control] remove-prompt 需要 list 和 index");
+          return;
+        }
+        const ok = this.presets.removePrompt(cmd.list, cmd.index);
+        console.log(`[control] remove-prompt ${cmd.list}[${cmd.index}]: ${ok ? "成功" : "失败"}`);
+        break;
+      }
+
+      case "get-presets": {
+        // 返回当前完整预设
+        const all = this.presets.get();
+        console.log("[control] 当前预设:");
+        console.log(JSON.stringify(all, null, 2));
+        break;
+      }
+
+      case "poke-test": {
+        // 手动触发一次戳醒测试
+        console.log("[control] 手动触发戳醒测试...");
+        await this.healthChecker._poke();
         break;
       }
 
