@@ -38,6 +38,7 @@ HEARTBEAT_FILE = FURINA_ROOT / "logs" / "heartbeat.json"
 WATCHDOG_LOG = FURINA_ROOT / "logs" / "watchdog.log"
 
 OC_EXE_PATHS = [
+    Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "@opencode-aidesktop" / "OpenCode.exe",
     Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "@opencode-ai" / "desktop" / "OpenCode.exe",
     Path(os.environ.get("LOCALAPPDATA", "")) / "OpenCode" / "OpenCode.exe",
 ]
@@ -102,16 +103,16 @@ def alert_start_oc():
 
 
 def start_oc():
-    """启动 oc 桌面版（--no-sandbox 绕过 Electron sandbox 0xc0000005）"""
+    """启动 oc 桌面版"""
     for path in OC_EXE_PATHS:
         if path.exists():
-            log(f"启动 oc: {path}")
+            log(f"启动 oc: {path} ({path.stat().st_size // 1024 // 1024}MB)")
             try:
                 subprocess.Popen(
-                    [str(path), "--no-sandbox"],
+                    [str(path)],
                     cwd=str(path.parent),
                 )
-                log("oc 启动命令已发送（--no-sandbox）")
+                log("oc 启动命令已发送")
                 return True
             except Exception as e:
                 log(f"oc 启动失败: {e}")
