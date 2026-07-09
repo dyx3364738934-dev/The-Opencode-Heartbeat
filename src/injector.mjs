@@ -95,6 +95,10 @@ export class Injector {
 
   /**
    * 找最新 session（或返回锁定的 session）
+   * 
+   * 默认创建/使用 title="furina-autonomous" 的专用 session，
+   * 避免注入消息干扰用户当前 session。
+   * 可通过 sessionId 参数锁定到其他 session。
    */
   async resolveSession() {
     const { base, headers } = await this.discover();
@@ -110,14 +114,30 @@ export class Injector {
       } catch {}
     }
 
-    // 列所有 session，取 time.updated 最大的
+    // 列所有 session
     const r = await fetch(`${base}/session`, { headers, signal: AbortSignal.timeout(5000) });
     if (!r.ok) throw new Error(`GET /session HTTP ${r.status}`);
     const sessions = await r.json();
-    if (!sessions.length) throw new Error("没有任何 session");
 
-    sessions.sort((a, b) => (b.time?.updated || 0) - (a.time?.updated || 0));
-    this.sessionId = sessions[0].id;
+    // 找 furina 专用 session
+    const FURINA_TITLE = "furina-autonomous";
+    let furinaSession = sessions.find((s) => s.title === FURINA_TITLE);
+
+    if (!furinaSession) {
+      // 创建新 session
+      console.log("[injector] 创建 furina 专用 session...");
+      const createR = await fetch(`${base}/session`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ title: FURINA_TITLE }),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!createR.ok) throw new Error(`POST /session HTTP ${createR.status}`);
+      furinaSession = await createR.json();
+      console.log(`[injector] 专用 session 已创建: ${furinaSession.id}`);
+    }
+
+    this.sessionId = furinaSession.id;
     this.lastAssistantTime = await this._getLastAssistantTime();
     return this.sessionId;
   }

@@ -44,14 +44,6 @@ export class FileWatcher extends BaseSensor {
       // 去抖在 _handleEvent 里自己做（更可控），不用 chokidar 的 awaitWriteFinish
     });
 
-    // ready 事件
-    this._ready = new Promise((resolve) => {
-      this.watcher.on("ready", () => {
-        this.ready = true;
-        resolve();
-      });
-    });
-
     const handleChange = (filePath, stats) => this._handleEvent(filePath, "change", stats);
     const handleAdd = (filePath, stats) => this._handleEvent(filePath, "add", stats);
     const handleUnlink = (filePath) => this._handleEvent(filePath, "unlink");
@@ -60,13 +52,16 @@ export class FileWatcher extends BaseSensor {
       .on("add", handleAdd)
       .on("change", handleChange)
       .on("unlink", handleUnlink)
+      .on("ready", () => {
+        this.ready = true;
+        console.log(`[file-watcher] 监听 ${this.paths.length} 个路径（ready）`);
+        for (const p of this.paths) console.log(`  - ${p}`);
+      })
       .on("error", (err) => console.error(`[file-watcher] 错误:`, err.message));
 
-    // 等 ready
-    await this._ready;
-
-    console.log(`[file-watcher] 监听 ${this.paths.length} 个路径`);
-    for (const p of this.paths) console.log(`  - ${p}`);
+    // 不等待 ready 事件（Desktop 等大目录扫描可能很久）
+    // chokidar 在扫描期间也能收到文件变化事件
+    console.log(`[file-watcher] 启动中，监听 ${this.paths.length} 个路径...`);
   }
 
   _handleEvent(filePath, event, stats) {
