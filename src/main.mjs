@@ -52,6 +52,7 @@ import { EventQueue, PRIORITY } from "./event-queue.mjs";
 import { Injector } from "./injector.mjs";
 import { Memory } from "./memory.mjs";
 import { FileWatcher } from "../sensors/file-watcher.mjs";
+import { ControlChannel } from "./control-channel.mjs";
 
 // ============================================================
 // 初始化各分区
@@ -188,6 +189,21 @@ async function main() {
     console.log(`[init] 启动 ${sensor.name}...`);
     await sensor.start();
   }
+
+  // 3.5 启动控制通道（运行时热切换 session / 手动注入 / 查看状态）
+  const control = new ControlChannel({
+    injector,
+    queue,
+    memory,
+    sensors,
+    onAddWatch: (paths) => {
+      // 动态添加文件监听
+      const fw = new FileWatcher(queue, { paths, debounceMs: 1000 });
+      fw.start();
+      sensors.push(fw);
+    },
+  });
+  control.start();
 
   // 4. 启动事件调度循环
   console.log("\n[init] 启动事件调度循环");
