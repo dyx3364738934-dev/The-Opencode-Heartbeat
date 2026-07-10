@@ -154,16 +154,14 @@ def find_oc_port():
 
 
 def read_password_file():
-    """读 furina-bootstrap plugin 泄露的密码"""
+    """读 furina-bootstrap plugin 泄露的密码（v0.2: 放宽过期判断）"""
     if not PASSWORD_FILE.exists():
         return None
     try:
         data = json.loads(PASSWORD_FILE.read_text(encoding="utf-8"))
-        # 检查密码文件新鲜度（10 分钟内）
-        age = time.time() * 1000 - data.get("leakedAt", 0)
-        if age > 600000:
-            log(f"密码文件过期 ({age/1000:.0f}s 前)")
-            return None
+        # v0.2 改：不再因时间过期而拒绝，而是依赖 verify_server 验证
+        # 旧逻辑：age > 600000 (10min) 就视为过期，导致 oc 重启后 furina 永远拉不起来
+        # 新逻辑：只要文件存在就返回，让 verify_server 验证密码是否还有效
         return data
     except Exception as e:
         log(f"读密码文件失败: {e}")
@@ -215,14 +213,43 @@ def start_furina(password, username="opencode", port=None):
     if port:
         env["OPENCODE_SERVER_PORT"] = str(port)
 
-    watch_path = str(Path.home() / "Desktop")
+    # v0.2: watch_path 可配置
+    # 优先级：环境变量 FURINA_WATCH_PATH > config/presets.json > ~/Desktop
+    watch_path = os.environ.get("FURINA_WATCH_PATH")
+    if not watch_path:
+        presets_file = FURINA_ROOT / "config" / "presets.json"
+        if presets_file.exists():
+            try:
+                pj = json.loads(presets_file.read_text(encoding="utf-8"))
+                watch_path = pj.get("watchPath")
+            except Exception:
+                pass
+    if not watch_path:
+        watch_path = str(Path.home() / "Desktop")
+    log(f"  监听路径: {watch_path}")
+    env["FURINA_WATCH_PATH"] = watch_path
+
+    # 重定向 stdout/stderr 到 furina-main.log（修复日志丢失 bug）
+    log_path = FURINA_ROOT / "logs" / "furina-main.log"
+    err_path = FURINA_ROOT / "logs" / "furina-main.err"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        stdout_f = open(log_path, "ab", buffering=0)  # append, unbuffered
+        stderr_f = open(err_path, "ab", buffering=0)
+    except Exception as e:
+        log(f"打开日志文件失败: {e}")
+        stdout_f = None
+        stderr_f = None
+
     try:
         subprocess.Popen(
             ["node", str(entry), "--watch", watch_path],
             cwd=str(FURINA_ROOT),
             env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout_f if stdout_f else subprocess.DEVNULL,
+            stderr=stderr_f if stderr_f else subprocess.DEVNULL,
             creationflags=0x00000200,  # CREATE_NEW_PROCESS_GROUP
-            close_fds=True
         )
         log("furina 启动命令已发送")
         return True
@@ -288,6 +315,23 @@ def main():
             password = pwd_data["password"]
             username = pwd_data.get("username", "opencode")
             port = find_oc_port()
+
+            # v0.3 改：启动前 verify_server（防止密码过期导致 furina 连不上 oc）
+            if port and not verify_server(port, password, username):
+                log(f"  verify_server 失败（密码可能过期），等 plugin 更新...")
+                verified = False
+                for attempt in range(6):  # 最多等 30s
+                    time.sleep(5)
+                    new_pwd = read_password_file()
+                    if new_pwd and new_pwd.get("password") != password:
+                        password = new_pwd["password"]
+                        if verify_server(port, password, username):
+                            log(f"  verify_server 成功（重试 {attempt+1} 次后）")
+                            verified = True
+                            break
+                if not verified:
+                    log(f"  verify_server 30s 后仍失败，furina 启动可能用错密码")
+
             start_furina(password, username, port)
             time.sleep(FURINA_STARTUP_WAIT)
 

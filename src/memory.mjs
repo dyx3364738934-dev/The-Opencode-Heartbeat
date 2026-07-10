@@ -34,11 +34,20 @@ export class Memory {
     this.memoryScript = config.memoryScript ?? join(homedir(), "search_oc_memory.py");
     this.pythonCmd = config.pythonCmd ?? "python";
 
+    // checkpoint 后自动 recall 的配置
+    this.autoRecallOnCheckpoint = config.autoRecallOnCheckpoint ?? true;
+    this.recallWindow = config.recallWindow ?? "1h"; // recall 的时间窗口
+    this.recallMaxChars = config.recallMaxChars ?? 800; // 注入到 oc 的记忆长度上限
+
     // 状态
     this.messageCount = 0;
     this.estimatedTokens = 0;
     this.lastCheckpoint = Date.now();
     this.compressing = false;
+
+    // 工作记忆：checkpoint 后自动填充，dispatch 时附加到 message
+    this.recentRecall = null; // 最近一次 recall 结果（字符串）
+    this.recentRecallAt = 0;
   }
 
   /**
@@ -60,27 +69,42 @@ export class Memory {
   }
 
   /**
-   * 强制检查点：压缩 + 记忆落盘
+   * 强制检查点：压缩 + 记忆落盘 + 记忆检索（v0.2 新增）
+   *
+   * 流程：
+   *   1. oc summarize（压缩当前 session 上下文，失败不阻塞后续步骤）
+   *   2. search_oc_memory.recall(近 N 小时) → 拉到 furina 工作记忆
+   *   3. 重置 furina 自己的计数
+   *   4. 下一次 dispatch 会把 recentRecall 作为上下文附加
+   *
+   * v0.2 改：summarize 失败也继续 recall，避免"压缩后调记忆"被 summarize 失败阻塞
    */
   async checkpoint() {
     if (this.compressing) return false;
     this.compressing = true;
     try {
-      // 1. 触发 oc 内置压缩
+      // 1. 触发 oc 内置压缩（失败不阻塞，让 recall 仍能工作）
       console.log("[memory] 触发 oc summarize...");
       const ok = await this.injector.summarize();
-      console.log(`[memory] summarize: ${ok ? "ok" : "failed"}`);
+      console.log(`[memory] summarize: ${ok ? "ok" : "failed（继续执行 recall）"}`);
 
-      // 2. 记忆落盘到 opencode.db（通过 search_oc_memory.py 读取，本身不写入--
-      //    opencode.db 是 oc 自己写的，我们只是确认能读到）
-      //    真正的"落盘"是 oc summarize 后 compaction part 自动写入 db
-      await this._verifyMemoryAccessible();
+      // 2. 调记忆插件检索近期记忆（无论 summarize 是否成功都执行）
+      if (this.autoRecallOnCheckpoint) {
+        console.log(`[memory] 触发 recall (last=${this.recallWindow})...`);
+        const recalled = await this.recall(null, { last: this.recallWindow });
+        if (recalled) {
+          this.setRecentRecall(recalled);
+          console.log(`[memory] recall 完成，工作记忆已更新（${recalled.length} 字符）`);
+        } else {
+          console.log("[memory] recall 无结果");
+        }
+      }
 
       // 3. 重置计数
       this.messageCount = 0;
       this.estimatedTokens = 0;
       this.lastCheckpoint = Date.now();
-      console.log("[memory] checkpoint 完成");
+      console.log(`[memory] checkpoint 完成 (summarize=${ok ? "ok" : "skip"})`);
       return true;
     } catch (e) {
       console.error("[memory] checkpoint 失败:", e.message);
@@ -88,6 +112,45 @@ export class Memory {
     } finally {
       this.compressing = false;
     }
+  }
+
+  /**
+   * 把 recall 结果存到工作记忆，供下一次 dispatch 附加到 message
+   */
+  setRecentRecall(text) {
+    if (!text) {
+      this.recentRecall = null;
+      this.recentRecallAt = 0;
+      return;
+    }
+    // 截断到 recallMaxChars 防止污染太大
+    const truncated = text.length > this.recallMaxChars
+      ? text.slice(0, this.recallMaxChars) + "\n...（已截断）"
+      : text;
+    this.recentRecall = truncated;
+    this.recentRecallAt = Date.now();
+  }
+
+  /**
+   * 取工作记忆（dispatch 时调用）
+   * @returns {string|null} 近期记忆文本，过期或为空则返回 null
+   */
+  getRecentRecall() {
+    if (!this.recentRecall) return null;
+    // 10 分钟内的 recall 有效
+    if (Date.now() - this.recentRecallAt > 10 * 60 * 1000) {
+      this.recentRecall = null;
+      return null;
+    }
+    return this.recentRecall;
+  }
+
+  /**
+   * 清空工作记忆
+   */
+  clearRecentRecall() {
+    this.recentRecall = null;
+    this.recentRecallAt = 0;
   }
 
   /**
@@ -149,6 +212,8 @@ export class Memory {
       maxTokens: this.maxTokens,
       lastCheckpointAgo: Math.round((Date.now() - this.lastCheckpoint) / 1000) + "s",
       compressing: this.compressing,
+      recentRecallAt: this.recentRecallAt ? Math.round((Date.now() - this.recentRecallAt) / 1000) + "s ago" : "never",
+      recentRecallLen: this.recentRecall ? this.recentRecall.length : 0,
     };
   }
 }

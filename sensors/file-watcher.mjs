@@ -15,8 +15,39 @@
 
 import chokidar from "chokidar";
 import { statSync } from "node:fs";
+import { resolve } from "node:path";
 import { BaseSensor } from "./base-sensor.mjs";
 import { PRIORITY } from "../src/event-queue.mjs";
+
+// 绝对路径硬黑名单（即使 chokidar ignore 失效也兜底过滤）
+// 防止 .git、furina 自身状态文件、控制通道文件、furina 自身代码目录被错误感知
+const HARD_IGNORE_DIRS = [
+  /[\\/]\.git[\\/]/i,
+  /[\\/]node_modules[\\/]/i,
+  /[\\/]logs[\\/]/i,
+  // v0.2: 排除 furina 自身代码目录（防止开发时自我循环感知）
+  // v0.4: 加 memory/（冬蕴雪手动记忆写入不触发 furina 感知）
+  // 注意：watch-test/ 故意不排除，允许开发者监控测试目录
+  /[\\/]furina[\\/](src|sensors|watchdog|config|docs|tests|memory)[\\/]/i,
+];
+const HARD_IGNORE_FILES = [
+  /[\\/]control\.json$/i,
+  /[\\/]heartbeat\.json$/i,
+  /[\\/]session\.lock$/i,
+  /[\\/]oc-password\.txt$/i,
+  /[\\/]oc-dead\.flag$/i,
+  /[\\/]package-lock\.json$/i,
+];
+
+function isHardIgnored(filePath) {
+  for (const re of HARD_IGNORE_DIRS) {
+    if (re.test(filePath)) return true;
+  }
+  for (const re of HARD_IGNORE_FILES) {
+    if (re.test(filePath)) return true;
+  }
+  return false;
+}
 
 export class FileWatcher extends BaseSensor {
   constructor(eventQueue, config = {}) {
@@ -65,6 +96,11 @@ export class FileWatcher extends BaseSensor {
   }
 
   _handleEvent(filePath, event, stats) {
+    // 绝对路径硬过滤（兜底，chokidar ignore 失效时仍生效）
+    if (isHardIgnored(filePath)) {
+      return;
+    }
+
     // 手动排除 furina 自身目录（防止心跳/配置自循环）
     const normalized = filePath.replace(/\\/g, "/");
     if (/[\/]logs[\/]/.test(normalized) || /[\/]config[\/]/.test(normalized)) {

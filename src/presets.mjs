@@ -26,6 +26,15 @@ const PRESETS_FILE = join(__dirname, "..", "config", "presets.json");
 const DEFAULT_PRESETS = {
   mode: "observe", // self-talk | find-work | observe
 
+  // v0.2 新增：timer 感知器配置（周期性 dogfooding）
+  timer: {
+    enabled: true,
+    intervalMs: 600000, // 10 分钟
+    initialDelayMs: 30000, // 30s 后第一次
+    message: "[furina 周期] 例行检查。请简短汇报当前状态或寻找新的改进点。",
+    priority: 20, // LOW
+  },
+
   // 空闲判定：oc 的 state=completed 且 N 秒没新消息 -> 触发模式逻辑
   idleThresholdMs: 300000, // 5 分钟空闲触发
 

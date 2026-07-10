@@ -7,7 +7,8 @@
  *
  * 支持的命令：
  *   { "cmd": "switch-session", "sessionId": "ses_xxx" }   切换目标 session
- *   { "cmd": "inject", "text": "消息内容" }                手动注入一条消息
+ *   { "cmd": "inject", "text": "...", "intent": "...", "silent": true }  手动注入（v0.5 支持意图+silent）
+ *   { "cmd": "silent-inject", "text": "...", "intent": "..." }           silent 注入（专用）
  *   { "cmd": "status" }                                    请求打印状态
  *   { "cmd": "summarize" }                                 强制触发上下文压缩
  *   { "cmd": "set-watch", "paths": ["..."] }               运行时添加监听路径
@@ -46,7 +47,7 @@ export class ControlChannel {
     // 监听 control.json 的创建
     const dir = join(this.controlFile, "..");
     watch(dir, (eventType, filename) => {
-      if (filename === "control.json" || filename === "control.json") {
+      if (filename === "control.json") {
         // 延迟一点避免写入不完整
         setTimeout(() => this._processIfExists(), 200);
       }
@@ -89,7 +90,9 @@ export class ControlChannel {
         this.injector.sessionId = cmd.sessionId;
         // 重置基准时间，避免下次注入轮询到旧消息
         this.injector.lastAssistantTime = 0;
-        console.log(`[control] 已切换到 session: ${cmd.sessionId}`);
+        // 持久化 session 锁定，重启 furina 后自动恢复
+        this.injector.saveSession(cmd.sessionId);
+        console.log(`[control] 已切换到 session: ${cmd.sessionId}（已持久化）`);
         break;
       }
 
@@ -98,14 +101,38 @@ export class ControlChannel {
           console.warn("[control] inject 需要 text");
           return;
         }
-        // 直接推一个高优先级事件到队列
+        // v0.5: 支持 intent/source 透传（默认 user / control）
+        // silent=true 走 silentInject（不进 dispatch、不等回复、不写记忆）
+        if (cmd.silent) {
+          const ok = await this.injector.silentInject(cmd.text, {
+            intent: cmd.intent || "user",
+            source: cmd.source || "control",
+          });
+          console.log(`[control] silent 注入 (intent=${cmd.intent || "user"}): ${cmd.text.slice(0, 50)}... ok=${ok}`);
+          break;
+        }
+        // 默认：进 dispatch 队列
         this.queue.push(
           "control",
           "manual.inject",
-          { text: cmd.text },
+          { text: cmd.text, intent: cmd.intent, source: cmd.source },
           80 // HIGH 优先级
         );
-        console.log(`[control] 已注入消息: ${cmd.text.slice(0, 50)}...`);
+        console.log(`[control] 已注入消息 (intent=${cmd.intent || "user"}): ${cmd.text.slice(0, 50)}...`);
+        break;
+      }
+
+      case "silent-inject": {
+        // v0.5: silent 注入专用命令（不依赖 inject.silent 标志）
+        if (!cmd.text) {
+          console.warn("[control] silent-inject 需要 text");
+          return;
+        }
+        const ok = await this.injector.silentInject(cmd.text, {
+          intent: cmd.intent || "self-direct",
+          source: cmd.source || "control",
+        });
+        console.log(`[control] silent 注入 (intent=${cmd.intent || "self-direct"}): ${cmd.text.slice(0, 50)}... ok=${ok}`);
         break;
       }
 
@@ -131,13 +158,38 @@ export class ControlChannel {
         break;
       }
 
+      case "recall": {
+        // 手动调一次记忆检索并把结果作为工作记忆存下来
+        const query = cmd.query || "";
+        console.log(`[control] 调 recall: query="${query}"`);
+        const result = await this.memory.recall(query || null, { last: cmd.last || "7d" });
+        if (result) {
+          this.memory.setRecentRecall(result);
+          console.log(`[control] recall 完成，结果已存入工作记忆`);
+        } else {
+          console.log(`[control] recall 无结果`);
+        }
+        break;
+      }
+
       case "set-watch": {
         if (!cmd.paths || !Array.isArray(cmd.paths)) {
           console.warn("[control] set-watch 需要 paths 数组");
           return;
         }
-        this.onAddWatch(cmd.paths);
-        console.log(`[control] 添加监听路径: ${cmd.paths.join(", ")}`);
+        // 去重：已有监听路径不再添加
+        const existing = new Set(
+          this.sensors
+            .filter((s) => s.name === "file-watcher")
+            .flatMap((s) => s.paths || [])
+        );
+        const fresh = cmd.paths.filter((p) => !existing.has(p));
+        if (fresh.length === 0) {
+          console.log(`[control] set-watch: 所有路径已在监听中，跳过`);
+          return;
+        }
+        this.onAddWatch(fresh);
+        console.log(`[control] 添加监听路径: ${fresh.join(", ")}（已跳过 ${cmd.paths.length - fresh.length} 个重复）`);
         break;
       }
 

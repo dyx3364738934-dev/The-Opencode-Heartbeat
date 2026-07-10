@@ -5,3 +5,19 @@ watch-test/
 *.err
 .DS_Store
 Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+
+# heartbeat 自身状态文件（防止 heartbeat 改 .gitignore 触发自我感知）
+control.json
+heartbeat.json
+oc-password.txt
+oc-dead.flag
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo

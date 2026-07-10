@@ -1,16 +1,18 @@
 {
-  "name": "furina",
-  "version": "0.1.0-beta",
-  "description": "opencode 自治感知-注入-记忆循环框架",
+  "name": "opencode-heartbeat",
+  "version": "0.7.10-beta",
+  "description": "OpenCode 外置元逻辑核心（心跳 + 注入 + 记忆循环）— 让 AI agent 跨对话延续身份、异步执行长期任务",
   "type": "module",
   "main": "src/main.mjs",
   "bin": {
-    "furina": "src/main.mjs",
-    "furina-watchdog": "watchdog/watchdog.mjs"
+    "opencode-heartbeat": "src/main.mjs",
+    "heartbeat-tail": "watchdog/heartbeat-tail.mjs"
   },
   "scripts": {
     "start": "node src/main.mjs",
-    "watchdog": "node watchdog/watchdog.mjs",
+    "tail": "node watchdog/heartbeat-tail.mjs --follow",
+    "tail:once": "node watchdog/heartbeat-tail.mjs --no-follow --lines 30",
+    "mcp": "python mcp/heartbeat_mcp_server.py",
     "test": "node tests/test-e2e.mjs"
   },
   "engines": {
@@ -19,5 +21,14 @@
   "dependencies": {
     "chokidar": "^4.0.3"
   },
+  "keywords": [
+    "opencode",
+    "ai-agent",
+    "heartbeat",
+    "resurrection",
+    "memory",
+    "mcp",
+    "long-running"
+  ],
   "license": "MIT"
 }

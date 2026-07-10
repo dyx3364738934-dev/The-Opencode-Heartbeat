@@ -1,5 +1,12 @@
 {
   "mode": "observe",
+  "timer": {
+    "enabled": false,
+    "intervalMs": 180000,
+    "initialDelayMs": 30000,
+    "message": "[furina 周期] 例行检查。请简短汇报当前状态或寻找新的改进点。",
+    "priority": 20
+  },
   "idleThresholdMs": 300000,
   "selfTalkPrompts": [
     "继续上一步的思考，看看有没有遗漏",
@@ -29,5 +36,6 @@
       "救命"
     ],
     "interveneMessage": "[furina] 检测到呼叫，我在线，有什么需要？"
-  }
+  },
+  "watchPath": "C:\\Users\\33647\\Desktop"
 }
