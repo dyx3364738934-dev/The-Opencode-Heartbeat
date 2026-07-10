@@ -22,13 +22,15 @@ import { PRIORITY } from "../src/event-queue.mjs";
 export class TimerSensor extends BaseSensor {
   constructor(eventQueue, config = {}) {
     super("timer-sensor", eventQueue, config);
-    this.intervalMs = config.intervalMs ?? 300000; // 5 分钟
-    this.initialDelayMs = config.initialDelayMs ?? 0;
-    this.message = config.message ?? "例行检查：周期性任务触发，请汇报状态或寻找改进点";
-    this.priority = config.priority ?? PRIORITY.LOW;
-    this.enabled = config.enabled ?? true;
+    // v0.7.10.2: 支持 presets 引用，热加载时读最新值
+    this.presets = config.presets || null;
+    this.intervalMs = config.intervalMs ?? this.presets?.get?.("timer")?.intervalMs ?? 180000;
+    this.initialDelayMs = config.initialDelayMs ?? this.presets?.get?.("timer")?.initialDelayMs ?? 60000;
+    this.message = config.message ?? this.presets?.get?.("timer")?.message ?? "[heartbeat] {time}";
+    this.priority = config.priority ?? this.presets?.get?.("timer")?.priority ?? PRIORITY.LOW;
+    this.enabled = config.enabled ?? this.presets?.get?.("timer")?.enabled ?? true;
     // v0.3: 触发时自动 recall（让 furina 维护 recentRecall）
-    this.autoRecall = config.autoRecall ?? true;
+    this.autoRecall = config.autoRecall ?? this.presets?.get?.("timer")?.autoRecall ?? false;
     // v0.7.10: oc 闲置检测（可选）—— 心跳只在 oc 闲置时发送，避免打断
     this.isOCIdle = config.isOCIdle || (async () => true);
     // v0.7.10: oc 忙时最大重试次数（之后强制发送，兜底防止心跳永远跳过）
@@ -37,6 +39,38 @@ export class TimerSensor extends BaseSensor {
     this.timer = null;
     this.tickCount = 0;
     this.skippedCount = 0;
+
+    // v0.7.10.2: 监听 presets 热加载，动态更新
+    if (this.presets?.onReload) {
+      this.presets.onReload((newData) => {
+        this._reloadConfig();
+      });
+    }
+  }
+
+  _reloadConfig() {
+    if (!this.presets) return;
+    const timer = this.presets.get("timer") || {};
+    const newInterval = timer.intervalMs ?? this.intervalMs;
+    const newMessage = timer.message ?? this.message;
+    const newAutoRecall = timer.autoRecall ?? this.autoRecall;
+    const newEnabled = timer.enabled ?? this.enabled;
+    if (newInterval !== this.intervalMs) {
+      console.log(`[timer-sensor] intervalMs 热更新 ${this.intervalMs}ms → ${newInterval}ms（下次 fire 生效）`);
+      this.intervalMs = newInterval;
+    }
+    if (newMessage !== this.message) {
+      console.log(`[timer-sensor] message 热更新`);
+      this.message = newMessage;
+    }
+    if (newAutoRecall !== this.autoRecall) {
+      console.log(`[timer-sensor] autoRecall 热更新 ${this.autoRecall} → ${newAutoRecall}`);
+      this.autoRecall = newAutoRecall;
+    }
+    if (newEnabled !== this.enabled) {
+      console.log(`[timer-sensor] enabled 热更新 ${this.enabled} → ${newEnabled}`);
+      this.enabled = newEnabled;
+    }
   }
 
   async start() {

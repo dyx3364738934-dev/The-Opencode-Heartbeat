@@ -188,17 +188,12 @@ if (watchPaths.length > 0) {
 // 默认启用，周期可由 presets.timer.intervalMs 配置
 const timerConfig = presets.get("timer") || {};
 const ts = new TimerSensor(queue, {
-  intervalMs: timerConfig.intervalMs ?? 180000, // 默认 3 分钟
-  initialDelayMs: timerConfig.initialDelayMs ?? 30000, // 默认 30s 后第一次
-  message: timerConfig.message ?? "[heartbeat] {time}",
-  priority: timerConfig.priority ?? PRIORITY.LOW,
-  enabled: timerConfig.enabled ?? true,
-  autoRecall: timerConfig.autoRecall ?? false, // v0.7.10: idle/silent 模式默认不 recall
+  presets, // v0.7.10.2: 传 presets 引用，支持热加载
   isOCIdle: () => injector.isOCIdleAsync(30000), // v0.7.10: oc 闲置才发心跳
   maxIdleRetries: 3, // oc 连续忙 3 轮后强制发（兜底）
 });
 sensors.push(ts);
-console.log(`  感知层: timer-sensor ${timerConfig.enabled === false ? "禁用" : "启用"} interval=${timerConfig.intervalMs ?? 180000}ms autoRecall=${timerConfig.autoRecall ?? false} idleCheck=on`);
+console.log(`  感知层: timer-sensor ${ts.enabled ? "启用" : "禁用"} interval=${ts.intervalMs}ms autoRecall=${ts.autoRecall} idleCheck=on`);
 
 // ============================================================
 // 心跳写入（给看门狗用）
