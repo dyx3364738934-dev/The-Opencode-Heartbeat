@@ -2,6 +2,30 @@
 
 All notable changes to Opencode Heartbeat are documented here.
 
+## [0.7.10.1-beta] - 2026-07-10
+
+### Added
+
+- **Heartbeat idle detection** — heartbeat skipped when OC is busy (last 30s has new messages OR state=working/processing/streaming)
+- **`/bind-status` HTTP endpoint + `bind_status` MCP tool** — query which session is locked, when, and current mode
+- **`/bind-current` HTTP endpoint + `bind_current` MCP tool** — OC can self-bind to a session (accepts `sessionId` or `titlePrefix`)
+- **Mode-based event filtering** — `silent/idle/task` modes ignore `file.changed` events
+- **5 modes** — `silent` / `idle` / `task` / `self-talk` / `find-work` / `observe`
+- **Dynamic time placeholder** — `{time}` in `timer.message` is replaced with current HH:MM
+- **`autoRecall: false`** default for idle/silent modes (no memory block in heartbeat)
+
+### Changed
+
+- **Default heartbeat interval: 600000ms (10 min) → 180000ms (3 min)**
+- **Default timer message**: `[furina 周期] 例行检查` → `[heartbeat] {time}`
+- **`furina-tail` renamed to `heartbeat-tail`** with translation key updates
+
+### Fixed
+
+- **`/bind-status` LOGS_DIR undefined error** (http-server.mjs)
+- **silentInject serverConfig reset** (v0.5.2) — was triggering onOCRestarted misfire
+- **furina-tail translation key ordering** (longer keys matched first to avoid `[dispatch]` shadowing `[dispatch] 注入 intent`)
+
 ## [0.7.10-beta] - 2026-07-10
 
 ### Initial Public Release

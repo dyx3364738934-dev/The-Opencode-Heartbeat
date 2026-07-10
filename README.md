@@ -85,7 +85,7 @@ npm run tail
 
 #### Heartbeat 心跳机制
 
-**默认 30 秒一次心跳**，向当前 oc 对话注入一条 `[heartbeat]` 消息。模型只需要知道"带 [heartbeat] 前缀的就是 heartbeat 发来的消息"即可。
+**默认 3 分钟一次心跳**，向当前 oc 对话注入一条 `[heartbeat] {time}` 消息。模型只需要知道"带 [heartbeat] 前缀的就是 heartbeat 发来的消息"即可。
 
 **配置心跳间隔**（编辑 `config/presets.json`）：
 
@@ -93,8 +93,8 @@ npm run tail
 {
   "timer": {
     "enabled": true,
-    "intervalMs": 30000,
-    "message": "[heartbeat] 你还好吗？如需继续工作请执行 X，如没事请回复 [heartbeat] 闲置"
+    "intervalMs": 180000,
+    "message": "[heartbeat] {time}"
   }
 }
 ```
@@ -163,13 +163,12 @@ providers()  # 返回所有 provider + model 列表
 {
   "timer": {
     "enabled": true,
-    "intervalMs": 600000,  // 10 分钟一次
+    "intervalMs": 180000,  // 3 分钟一次
     "message": "[heartbeat] 检查 furina 项目状态，寻找可优化点；如有进展请写日志。"
   }
 }
-```
 
-heartbeat 会每 10 分钟唤醒 oc，oc 决定是否工作（如果不工作就回复简短状态）。
+heartbeat 会每 3 分钟唤醒 oc，oc 决定是否工作（如果不工作就回复简短状态）。
 
 ### MCP 工具清单
 

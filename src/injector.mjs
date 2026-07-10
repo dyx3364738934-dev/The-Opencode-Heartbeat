@@ -328,6 +328,45 @@ export class Injector {
   }
 
   /**
+   * v0.7.10: 检查 oc 是否闲置
+   * 闲置定义：最近 30 秒内没有新 assistant 消息 AND 当前消息 state=completed/idle
+   * @param {number} quietThresholdMs - 多少秒内无新消息算闲置（默认 30s）
+   * @returns {Promise<boolean>}
+   */
+  async isOCIdleAsync(quietThresholdMs = 30000) {
+    try {
+      const { base, headers } = await this.discover();
+      const sid = this.sessionId;
+      if (!sid) return true; // 没锁 session 算闲置
+
+      const r = await fetch(`${base}/session/${sid}/message?limit=3`, {
+        headers,
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!r.ok) return true; // oc 不响应算闲置
+      const msgs = await r.json();
+      if (!Array.isArray(msgs) || msgs.length === 0) return true;
+
+      // 找最新 assistant 消息
+      let latest = null;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].info?.role === "assistant") { latest = msgs[i]; break; }
+      }
+      if (!latest) return true;
+
+      const created = latest.info?.time?.created || 0;
+      const state = latest.info?.state || "";
+      const age = Date.now() - created;
+      const quietEnough = age > quietThresholdMs;
+      const stateIdle = !["working", "processing", "streaming"].includes(state);
+
+      return quietEnough && stateIdle;
+    } catch {
+      return true; // 检测失败默认闲置（保守：宁可发也不漏）
+    }
+  }
+
+  /**
    * v0.5: silent 注入 -- 只发到 oc，不进 dispatch 队列，不等回复，不写记忆
    * 用于 agent 内部通讯（oc 派给自己的任务、agent 集群通知、系统级消息）
    * v0.5.1: 失败时重试 2 次（避免瞬时网络抖动）

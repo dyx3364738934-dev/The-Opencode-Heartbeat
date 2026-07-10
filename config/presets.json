@@ -1,11 +1,12 @@
 {
-  "mode": "observe",
+  "mode": "idle",
   "timer": {
-    "enabled": false,
+    "enabled": true,
     "intervalMs": 180000,
-    "initialDelayMs": 30000,
-    "message": "[furina 周期] 例行检查。请简短汇报当前状态或寻找新的改进点。",
-    "priority": 20
+    "initialDelayMs": 60000,
+    "message": "[heartbeat] {time}",
+    "priority": 20,
+    "autoRecall": false
   },
   "idleThresholdMs": 300000,
   "selfTalkPrompts": [
@@ -21,7 +22,7 @@
   "healthCheck": {
     "staleStateMs": 120000,
     "pokeMessages": [
-      "你还在吗？如果卡住了请回复 [furina] 卡住了",
+      "你还在吗？如果卡住了请回复 [heartbeat] 卡住了",
       "尝试重新聚焦：请总结当前任务状态和下一步计划"
     ],
     "pokeIntervalMs": 60000,
@@ -30,12 +31,18 @@
   },
   "observe": {
     "interveneKeywords": [
-      "furina",
-      "芙宁娜",
+      "heartbeat",
+      "心跳",
       "help",
       "救命"
     ],
-    "interveneMessage": "[furina] 检测到呼叫，我在线，有什么需要？"
+    "interveneMessage": "[heartbeat] 检测到呼叫，我在线，有什么需要？"
+  },
+  "modes": {
+    "silent": "完全不主动注入，agent 完全自由",
+    "idle": "只发心跳（[heartbeat] {time}），不派活",
+    "task": "心跳 + 派活提示（[heartbeat task] 去检查 X）",
+    "observe": "心跳 + 文件变化感知 + 系统通知"
   },
   "watchPath": "C:\\Users\\33647\\Desktop"
 }

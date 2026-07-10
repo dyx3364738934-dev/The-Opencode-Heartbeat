@@ -188,14 +188,17 @@ if (watchPaths.length > 0) {
 // 默认启用，周期可由 presets.timer.intervalMs 配置
 const timerConfig = presets.get("timer") || {};
 const ts = new TimerSensor(queue, {
-  intervalMs: timerConfig.intervalMs ?? 600000, // 默认 10 分钟
+  intervalMs: timerConfig.intervalMs ?? 180000, // 默认 3 分钟
   initialDelayMs: timerConfig.initialDelayMs ?? 30000, // 默认 30s 后第一次
-  message: timerConfig.message ?? "[furina 周期] 例行检查。请简短汇报当前状态或寻找新的改进点。",
+  message: timerConfig.message ?? "[heartbeat] {time}",
   priority: timerConfig.priority ?? PRIORITY.LOW,
   enabled: timerConfig.enabled ?? true,
+  autoRecall: timerConfig.autoRecall ?? false, // v0.7.10: idle/silent 模式默认不 recall
+  isOCIdle: () => injector.isOCIdleAsync(30000), // v0.7.10: oc 闲置才发心跳
+  maxIdleRetries: 3, // oc 连续忙 3 轮后强制发（兜底）
 });
 sensors.push(ts);
-console.log(`  感知层: timer-sensor ${timerConfig.enabled === false ? "禁用" : "启用"} interval=${timerConfig.intervalMs ?? 600000}ms`);
+console.log(`  感知层: timer-sensor ${timerConfig.enabled === false ? "禁用" : "启用"} interval=${timerConfig.intervalMs ?? 180000}ms autoRecall=${timerConfig.autoRecall ?? false} idleCheck=on`);
 
 // ============================================================
 // 心跳写入（给看门狗用）
@@ -236,6 +239,13 @@ writeHeartbeat(); // 立即写一次
 
 async function dispatchHandler(event) {
   console.log(`\n[dispatch] ${event.source}/${event.type} (priority=${event.priority})`);
+
+  // v0.7.10: mode 过滤 —— silent/idle/task 模式不响应 file.changed
+  const currentMode = presets.get("mode") || "silent";
+  if (event.type === "file.changed" && !["observe", "self-talk", "find-work"].includes(currentMode)) {
+    console.log(`[dispatch] 当前模式 ${currentMode}，忽略 file.changed`);
+    return;
+  }
 
   // v0.3: timer 触发时自动 recall，维护 recentRecall（让 furina 持续有上下文）
   if (event.type === "timer.tick" && event.payload?.autoRecall) {

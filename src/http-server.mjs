@@ -29,7 +29,8 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, "..");
-const PASSWORD_FILE = join(PROJECT_ROOT, "logs", "oc-password.txt");
+const LOGS_DIR = join(PROJECT_ROOT, "logs");
+const PASSWORD_FILE = join(LOGS_DIR, "oc-password.txt");
 
 export class FurinaHTTPServer {
   constructor({ injector, queue, memory, presets, workflowPresets, port = 9999 }) {
@@ -160,6 +161,65 @@ export class FurinaHTTPServer {
 
     if (method === "GET" && path === "/heartbeat") {
       return { alive: true, ts: Date.now() };
+    }
+
+    // v0.7.10: 绑定状态查询（用于 Koko 确认 furina 锁定了哪些对话）
+    if (method === "GET" && path === "/bind-status") {
+      const lockFile = join(LOGS_DIR, "session.lock");
+      let lockedAt = null;
+      let lockedSessionIdInFile = null;
+      try {
+        if (existsSync(lockFile)) {
+          const data = JSON.parse(readFileSync(lockFile, "utf-8"));
+          lockedAt = data.savedAt || null;
+          lockedSessionIdInFile = data.sessionId || null;
+        }
+      } catch {}
+      return {
+        alive: true,
+        pid: process.pid,
+        uptime: Math.round(process.uptime()),
+        activeSessionId: this.injector.sessionId,        // 当前内存中锁的
+        lockedSessionId: lockedSessionIdInFile,         // session.lock 里的
+        lockedAt,
+        boundCount: 1,                                     // v0.7.10 当前只锁 1 个
+        mode: this.presets.get("mode"),
+        ts: Date.now(),
+      };
+    }
+
+    // v0.7.10: 主动绑定当前 session（oc 调一下就绑到自己）
+    // v0.7.10.1: 支持 sessionId 直传 或 titlePrefix 自动找
+    if (method === "POST" && path === "/bind-current") {
+      const { sessionId, titlePrefix } = body || {};
+      if (!sessionId && !titlePrefix) {
+        return { ok: false, error: "bind-current 需要 { sessionId } 或 { titlePrefix }" };
+      }
+      let targetId = sessionId;
+      let targetTitle = null;
+
+      if (!targetId && titlePrefix) {
+        // 通过 title 前缀自动找
+        try {
+          const oc = await this._getOcConfig();
+          const r = await fetch(`${oc.base}/session`, { headers: oc.headers, signal: AbortSignal.timeout(10000) });
+          const sessions = await r.json();
+          const match = sessions.find((s) => s.title?.startsWith(titlePrefix));
+          if (!match) {
+            return { ok: false, error: `找不到 title 以 "${titlePrefix}" 开头的 session` };
+          }
+          targetId = match.id;
+          targetTitle = match.title;
+        } catch (e) {
+          return { ok: false, error: `查 session 失败: ${e.message}` };
+        }
+      }
+
+      this.injector.sessionId = targetId;
+      this.injector.lastAssistantTime = 0;
+      this.injector.saveSession(targetId);
+      console.log(`[bind] oc 主动绑定 session: ${targetId}${targetTitle ? ` (${targetTitle})` : ""}`);
+      return { ok: true, sessionId: targetId, title: targetTitle, msg: "已绑定" };
     }
 
     if (method === "GET" && path === "/presets") {

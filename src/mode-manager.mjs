@@ -1,14 +1,17 @@
 /**
  * src/mode-manager.mjs
  *
- * 模式管理器：三种工作模式 + 空闲注入
+ * 模式管理器：五种工作模式
  *
  * 模式：
- *   self-talk  空闲时注入 selfTalkPrompts 轮转消息，形成自循环
+ *   silent     完全不主动注入（agent 完全自由）
+ *   idle       只发心跳（timer-sensor 触发），不派活
+ *   task       心跳 + 派活提示
+ *   self-talk  空闲时注入 selfTalkPrompts 轮转消息
  *   find-work  空闲时注入 findWorkPrompts 探索性任务
  *   observe    只监测不主动注入，检测到关键词才介入
  *
- * 空闲注入由 HealthChecker.onIdle 触发
+ * 空闲注入由 HealthChecker.onIdle 触发（仅 self-talk/find-work 模式）
  */
 
 export class ModeManager {
@@ -34,7 +37,7 @@ export class ModeManager {
   }
 
   setMode(mode) {
-    if (["self-talk", "find-work", "observe"].includes(mode)) {
+    if (["silent", "idle", "task", "self-talk", "find-work", "observe"].includes(mode)) {
       this.presets.set("mode", mode);
       console.log(`[mode] 切换到 ${mode}`);
       return true;
@@ -44,6 +47,7 @@ export class ModeManager {
 
   /**
    * 空闲触发：根据当前模式注入对应消息
+   * v0.7.10: silent/idle 模式不响应 onIdle（避免干扰）
    */
   async _onIdle() {
     this.stats.idleTriggered++;
@@ -52,6 +56,15 @@ export class ModeManager {
 
     try {
       switch (mode) {
+        case "silent":
+          console.log("[mode] silent 模式，不主动注入");
+          break;
+        case "idle":
+          console.log("[mode] idle 模式：依赖 timer-sensor 发心跳");
+          break;
+        case "task":
+          await this._findWork(); // 复用 findWork 逻辑
+          break;
         case "self-talk":
           await this._selfTalk();
           break;
@@ -59,7 +72,6 @@ export class ModeManager {
           await this._findWork();
           break;
         case "observe":
-          // 观察模式不主动注入
           console.log("[mode] 观察模式，不主动注入");
           break;
       }
@@ -77,7 +89,6 @@ export class ModeManager {
     console.log(`[mode] 自我对话注入: ${prompt}`);
     await this.injector.inject(prompt);
     this.stats.selfTalkInjected++;
-    // 重新开始健康追踪
     this.healthChecker.startTracking();
   }
 
@@ -95,7 +106,6 @@ export class ModeManager {
 
   /**
    * 观察模式下的关键词介入
-   * 被 main.mjs 在检测到新消息含关键词时调用
    */
   async intervene(originalMessage) {
     const mode = this.getMode();
@@ -106,7 +116,7 @@ export class ModeManager {
     const hasKeyword = keywords.some((kw) => originalMessage?.includes(kw));
 
     if (hasKeyword) {
-      const msg = observe.interveneMessage || "[furina] 检测到呼叫，我在线";
+      const msg = observe.interveneMessage || "[heartbeat] 检测到呼叫，我在线";
       console.log(`[mode] 观察模式关键词介入: ${msg}`);
       await this.injector.inject(msg);
       this.stats.observeIntervened++;

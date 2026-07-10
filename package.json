@@ -1,6 +1,6 @@
 {
   "name": "opencode-heartbeat",
-  "version": "0.7.10-beta",
+  "version": "0.7.10.1-beta",
   "description": "OpenCode 外置元逻辑核心（心跳 + 注入 + 记忆循环）— 让 AI agent 跨对话延续身份、异步执行长期任务",
   "type": "module",
   "main": "src/main.mjs",

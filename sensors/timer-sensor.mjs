@@ -29,22 +29,52 @@ export class TimerSensor extends BaseSensor {
     this.enabled = config.enabled ?? true;
     // v0.3: 触发时自动 recall（让 furina 维护 recentRecall）
     this.autoRecall = config.autoRecall ?? true;
+    // v0.7.10: oc 闲置检测（可选）—— 心跳只在 oc 闲置时发送，避免打断
+    this.isOCIdle = config.isOCIdle || (async () => true);
+    // v0.7.10: oc 忙时最大重试次数（之后强制发送，兜底防止心跳永远跳过）
+    this.maxIdleRetries = config.maxIdleRetries ?? 3;
+    this.idleRetries = 0;
     this.timer = null;
     this.tickCount = 0;
+    this.skippedCount = 0;
   }
 
   async start() {
     if (this.running) return;
     this.running = true;
-    console.log(`[timer-sensor] 启动 interval=${this.intervalMs}ms delay=${this.initialDelayMs}ms autoRecall=${this.autoRecall}`);
+    console.log(`[timer-sensor] 启动 interval=${this.intervalMs}ms delay=${this.initialDelayMs}ms autoRecall=${this.autoRecall} idleCheck=${typeof this.isOCIdle === "function"}`);
 
-    const fire = () => {
+    const fire = async () => {
       if (!this.running || !this.enabled) return;
+
+      // v0.7.10: oc 闲置检测 —— 忙时跳过（不重试，下一轮 10 分钟后再判断）
+      try {
+        const idle = await this.isOCIdle();
+        if (!idle) {
+          this.idleRetries++;
+          if (this.idleRetries <= this.maxIdleRetries) {
+            this.skippedCount++;
+            console.log(`[timer-sensor] oc 忙，跳过本次心跳 (${this.idleRetries}/${this.maxIdleRetries}，已跳过 ${this.skippedCount} 次)`);
+            this.timer = setTimeout(fire, this.intervalMs);
+            return;
+          }
+          console.log(`[timer-sensor] oc 持续忙 ${this.maxIdleRetries} 轮，强制发送心跳`);
+          this.idleRetries = 0;
+        } else {
+          this.idleRetries = 0;
+        }
+      } catch (e) {
+        console.warn(`[timer-sensor] 闲置检测失败: ${e.message?.slice(0, 80)}`);
+      }
+
       this.tickCount++;
+      // v0.7.10: 动态插入时间戳（如果有 {time} 占位符）
+      const time = new Date().toTimeString().slice(0, 5);
+      const message = this.message.replace(/\{time\}/g, time);
       this.emit({
         type: "timer.tick",
         payload: {
-          message: this.message,
+          message,
           tick: this.tickCount,
           intervalMs: this.intervalMs,
           autoRecall: this.autoRecall, // v0.3: 提示 dispatchHandler 自动 recall
