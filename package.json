@@ -1,18 +1,18 @@
 {
-  "name": "opencode-heartbeat",
-  "version": "0.7.10.1-beta",
-  "description": "OpenCode 外置元逻辑核心（心跳 + 注入 + 记忆循环）— 让 AI agent 跨对话延续身份、异步执行长期任务",
+  "name": "korina",
+  "version": "0.9.28",
+  "description": "korina — Opencode 的心跳底座（心跳调度 + 注入 + 续命 + 多会话 + TTS + 语音输入），可构建 agent 工作流生态",
   "type": "module",
   "main": "src/main.mjs",
   "bin": {
-    "opencode-heartbeat": "src/main.mjs",
-    "heartbeat-tail": "watchdog/heartbeat-tail.mjs"
+    "korina": "src/main.mjs",
+    "korina-tail": "watchdog/heartbeat-tail.mjs"
   },
   "scripts": {
     "start": "node src/main.mjs",
     "tail": "node watchdog/heartbeat-tail.mjs --follow",
     "tail:once": "node watchdog/heartbeat-tail.mjs --no-follow --lines 30",
-    "mcp": "python mcp/heartbeat_mcp_server.py",
+    "mcp": "python mcp/korina_mcp_server.py",
     "test": "node tests/test-e2e.mjs"
   },
   "engines": {
@@ -25,10 +25,24 @@
     "opencode",
     "ai-agent",
     "heartbeat",
-    "resurrection",
-    "memory",
+    "korina",
+    "timer-tasks",
     "mcp",
-    "long-running"
+    "multi-session",
+    "long-running",
+    "tts",
+    "voice-input",
+    "whisper",
+    "desktop-agent"
   ],
-  "license": "MIT"
+  "author": "Koko & 冬蕴雪",
+  "license": "MIT",
+  "homepage": "https://github.com/dyx3364738934-dev/The-Opencode-Heartbeat",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dyx3364738934-dev/The-Opencode-Heartbeat.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dyx3364738934-dev/The-Opencode-Heartbeat/issues"
+  }
 }

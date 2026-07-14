@@ -22,9 +22,9 @@ import { tmpdir } from "node:os";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, "..");
 
-import { EventQueue, PRIORITY } from "../src/event-queue.mjs";
+import { EventQueue, PRIORITY } from "../src/core/event-queue.mjs";
 import { Injector } from "../src/injector.mjs";
-import { FileWatcher } from "../sensors/file-watcher.mjs";
+import { FileWatcher } from "../plugins/file-watcher/plugin.mjs";
 
 let passed = 0;
 let failed = 0;
@@ -39,7 +39,7 @@ function assert(cond, msg) {
 }
 
 async function main() {
-  console.log("=== furina 端到端测试 ===\n");
+  console.log("=== korina 端到端测试 ===\n");
 
   // --- 阶段 1: 注入区发现 oc ---
   console.log("--- 阶段 1: 注入区发现 oc server ---");
@@ -61,7 +61,7 @@ async function main() {
 
   // --- 阶段 2: 感知层触发 ---
   console.log("\n--- 阶段 2: 文件感知器触发 ---");
-  const testDir = join(tmpdir(), "furina-e2e-test");
+  const testDir = join(tmpdir(), "korina-e2e-test");
   if (!existsSync(testDir)) mkdirSync(testDir, { recursive: true });
   const testFile = join(testDir, "trigger.txt");
 
@@ -83,10 +83,11 @@ async function main() {
 
   // 创建文件触发事件
   console.log("  写入测试文件...");
-  writeFileSync(testFile, "hello furina\n");
+  writeFileSync(testFile, "hello korina\n");
 
-  // 等去抖（200ms）+ 安全余量
-  await sleep(1000);
+  // v0.9.3: Windows 上 chokidar + awaitWriteFinish(500ms) 检测较慢
+  // 原 1000ms 不够，等 3000ms
+  await sleep(3000);
 
   assert(queue.size > 0, `队列收到事件 (size=${queue.size})`);
 
@@ -103,7 +104,7 @@ async function main() {
     // 构造注入消息（不实际发送）
     const message = formatEventMessage(event);
     console.log(`  构造消息: ${message.slice(0, 120)}...`);
-    assert(message.includes("furina 感知"), "消息包含 furina 标识");
+    assert(message.includes("korina 感知"), "消息包含 korina 标识");
     assert(message.includes("trigger.txt"), "消息包含文件名");
   }
 
@@ -126,9 +127,9 @@ async function main() {
 function formatEventMessage(event) {
   switch (event.type) {
     case "file.changed":
-      return `[furina 感知] 文件变化：${event.payload.event} ${event.payload.path} (size=${event.payload.size})。\n请判断这个变化是否需要处理。如果需要，用可用工具分析或操作；如果不需要，回复：[furina] 忽略。`;
+      return `[korina 感知] 文件变化：${event.payload.event} ${event.payload.path} (size=${event.payload.size})。\n请判断这个变化是否需要处理。如果需要，用可用工具分析或操作；如果不需要，回复：[korina] 忽略。`;
     default:
-      return `[furina] 事件 ${event.type}: ${JSON.stringify(event.payload).slice(0, 200)}`;
+      return `[korina] 事件 ${event.type}: ${JSON.stringify(event.payload).slice(0, 200)}`;
   }
 }
 

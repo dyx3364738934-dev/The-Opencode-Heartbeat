@@ -4,7 +4,7 @@
  * 测试事件队列的令牌桶 + 去抖 + 优先级调度
  */
 
-import { EventQueue, PRIORITY } from "../src/event-queue.mjs";
+import { EventQueue, PRIORITY } from "../src/core/event-queue.mjs";
 
 let passed = 0;
 let failed = 0;
@@ -134,7 +134,7 @@ function sleep(ms) {
 }
 
 async function runAll() {
-  console.log("=== furina 事件队列测试 ===");
+  console.log("=== korina 事件队列测试 ===");
   await testBasicPushPop();
   await testPriority();
   await testTokenBucket();

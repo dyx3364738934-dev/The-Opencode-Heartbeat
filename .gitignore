@@ -1,20 +1,56 @@
+# 依赖
 node_modules/
+
+# 运行时日志 + 状态
 logs/
 watch-test/
 *.log
 *.err
-.DS_Store
-Thumbs.db
+*.pid
 
 # Python
 __pycache__/
 *.pyc
 
+# 系统文件
+.DS_Store
+Thumbs.db
+
 # heartbeat 自身状态文件（防止 heartbeat 改 .gitignore 触发自我感知）
 control.json
 heartbeat.json
+heartbeat.*.json
 oc-password.txt
 oc-dead.flag
+session.*.lock
+
+# 真实配置（含 API key 等 secrets），用 presets.example.json 代替
+config/presets.json
+config/presets.json.bak
+config/lyrics-position.json
+
+# 临时测试脚本（含 API key 或本地路径，不发布）
+test-tts.mjs
+test-tts.mp3
+test-sse.mjs
+test-e2e.ps1
+tests/v4f-tts-multiturn-test.ps1
+tests/diag-chokidar.mjs
+
+# 个人内容（对话记忆 / 工作笔记，不发布）
+memory/
+ACTIVE.md
+FIRST_THING.md
+WAKE_UP_GUIDE.md
+USER_EXPERIENCE.md
+PROJECT_BOARD.md
+
+# 个人文档（含本地路径或个人评估）
+docs/resurrection-test-report.md
+docs/self-evaluation-koko-away.md
+
+# 误创建的中文文件名
+启动
 
 # 编辑器
 .vscode/

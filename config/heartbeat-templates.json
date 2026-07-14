@@ -1,0 +1,19 @@
+{
+  "_meta": {
+    "purpose": "alive-v1 心跳模板 — 真实环境快照（每次 token 不一样 = 真抗衰减）",
+    "version": "v0.9.23",
+    "design": [
+      "时间/进程/内存/磁盘/前台窗口都是实时采样",
+      "每次心跳 token 都不一样（不靠措辞扰动抗衰减）",
+      "引导思考基于真实数据生成（不是预设元指令）"
+    ]
+  },
+  "templates": [
+    {
+      "id": "alive-v1",
+      "label": "环境感知（默认）",
+      "weight": 1,
+      "body": "[{time} 第 {fireCount} 次心跳 · {intervalHuman}]\n\n【系统】\n{topProcesses}\n{systemStats}\n\n【前台】\n窗口: {foregroundWindow}\n{kokoActivity}\n\n【引导】\n{guidance}"
+    }
+  ]
+}

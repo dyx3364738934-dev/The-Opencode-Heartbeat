@@ -1,444 +1,296 @@
 /**
  * src/main.mjs
  *
- * furina 主入口：串联 感知层 -> 核心区 -> 注入区 -> 记忆区
- * 看门狗是独立进程，单独启动
+ * v0.9: 插件系统架构 -- main.mjs 只负责加载插件 + 启动队列 + 退出清理
  *
- * 用法：
- *   node src/main.mjs [--watch <path>] [--session <id>]
+ * 架构：
+ *   core/   -- 事件队列 + HTTP 路由 + 事件总线 + 插件加载器 + 配置系统
+ *   plugins/ -- 业务插件（每个独立目录，互不 import）
  *
- * 环境要求：
- *   - 在 opencode 桌面版环境内运行（继承 OPENCODE_SERVER_PASSWORD）
- *   - 或手动设置 OPENCODE_SERVER_PASSWORD 环境变量
+ * 插件通过 ctx（queue/bus/http/presets/korina）交互，互相不直接依赖。
+ * 加功能 = 新建 plugins/xxx/plugin.mjs，不改核心代码。
  */
 
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ProcessHeartbeat } from "./core/process-heartbeat.mjs";
+import { OcHealthChecker } from "./core/oc-health-checker.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, "..");
 const LOGS_DIR = join(PROJECT_ROOT, "logs");
-const HEARTBEAT_FILE = join(LOGS_DIR, "heartbeat.json");
+const LIVE_LOG = join(LOGS_DIR, "korina-live.log");
+
+export const KORINA_VERSION = "0.9.3";
+export const KORINA_BUILD_DATE = "2026-07-11";
+// v0.9.22 (manual #49): 强绑定 worker 模式（删 --mode 解析 + scheduler mode 死代码）
+//   之前 v0.9.5.5 注释"ARCH-001 调度器架构第一步"——生产永远 worker，scheduler 模式 0 次用过（manual #24 O2 已标死代码）
+//   KOKO 拍板 A = 治根因（删画饼 + 强绑定唯一真用模式）
+export const KORINA_MODE = "worker";
 
 // 确保日志目录存在
 if (!existsSync(LOGS_DIR)) mkdirSync(LOGS_DIR, { recursive: true });
 
-// 解析命令行参数
-const args = process.argv.slice(2);
-function getArg(name, defaultValue) {
-  const idx = args.indexOf(`--${name}`);
-  return idx !== -1 ? args[idx + 1] : defaultValue;
-}
-function getArgMulti(name) {
-  const result = [];
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === `--${name}`) {
-      result.push(args[i + 1]);
-      i++;
-    }
-  }
-  return result;
-}
-
-const watchPaths = getArgMulti("watch");
-// v0.2: 如果没传 --watch，尝试从环境变量 FURINA_WATCH_PATH 读（多个用 ; 分隔）
-if (watchPaths.length === 0 && process.env.FURINA_WATCH_PATH) {
-  for (const p of process.env.FURINA_WATCH_PATH.split(/[;|]/)) {
-    const trimmed = p.trim();
-    if (trimmed) watchPaths.push(trimmed);
-  }
-}
-const sessionArg = getArg("session", null);
-
 // ============================================================
-// 模块导入
+// 实时日志（500ms flush 到 logs/korina-live.log）
 // ============================================================
+import { EventQueue } from "./core/event-queue.mjs";
+import { EventBus } from "./core/event-bus.mjs";
+import { HTTPRouter } from "./core/http-router.mjs";
+import { PluginLoader } from "./core/plugin-loader.mjs";
+import { Presets } from "./core/presets.mjs";
 
-import { EventQueue, PRIORITY } from "./event-queue.mjs";
-import { Injector } from "./injector.mjs";
-import { Memory } from "./memory.mjs";
-import { FileWatcher } from "../sensors/file-watcher.mjs";
-import { TimerSensor } from "../sensors/timer-sensor.mjs";
-import { ControlChannel } from "./control-channel.mjs";
-import { Presets } from "./presets.mjs";
-import { HealthChecker } from "./health-checker.mjs";
-import { ModeManager } from "./mode-manager.mjs";
-import { FurinaHTTPServer } from "./http-server.mjs";
-import { WorkLog } from "./worklog.mjs";
-import { WorkflowPresets } from "./workflow-presets.mjs";
-import { INTENTS, renderInjectMessage } from "./inject-intent.mjs";
+if (existsSync(LIVE_LOG)) writeFileSync(LIVE_LOG, "");
+const _origLog = console.log.bind(console);
+const _origWarn = console.warn.bind(console);
+const _origErr = console.error.bind(console);
+const _strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
+let _logBuf = [];
+let _logFlushTimer = null;
+const _queueLog = (level, args) => {
+  const line = `[${new Date().toISOString().slice(11, 19)}][${level}] ` + args.map(a => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
+  _logBuf.push(_strip(line));
+  if (_logBuf.length >= 20 && !_logFlushTimer) _logFlushTimer = setTimeout(_flushLog, 0);
+};
+const _flushLog = () => {
+  if (_logBuf.length === 0) { _logFlushTimer = null; return; }
+  try { appendFileSync(LIVE_LOG, _logBuf.join("\n") + "\n"); } catch {}
+  _logBuf = [];
+  _logFlushTimer = null;
+};
+const _logFlushInterval = setInterval(_flushLog, 500);
+console.log = (...args) => { _queueLog("INF", args); _origLog(...args); };
+console.warn = (...args) => { _queueLog("WRN", args); _origWarn(...args); };
+console.error = (...args) => { _queueLog("ERR", args); _origErr(...args); };
 
-// ============================================================
-// 初始化各分区
-// ============================================================
-
-console.log("=== furina 启动 ===");
+console.log(`=== korina v${KORINA_VERSION} 启动 ===`);
 console.log(`  PID: ${process.pid}`);
-console.log(`  项目根: ${PROJECT_ROOT}`);
+console.log(`  构建: ${KORINA_BUILD_DATE}`);
+console.log(`  模式: ${KORINA_MODE}（manual #49 强绑定 worker）`);
+console.log(`  架构: 插件系统（core + plugins）`);
+console.log(`  实时日志: ${LIVE_LOG}`);
 
-// 核心区：事件队列 + 令牌桶
+// ============================================================
+// 全局异常兜底
+// ============================================================
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason?.message || reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err?.message || err);
+});
+
+// ============================================================
+// 初始化核心组件
+// ============================================================
 const queue = new EventQueue({
   maxBurst: 10,
   refillRate: 5,
   hourlyLimit: 200,
   debounceMs: 500,
-});
-console.log(`  核心区: 令牌桶 ${queue.maxBurst}/${queue.refillRate}/s, 每小时上限 ${queue.hourlyLimit}`);
-
-// 注入区
-const injector = new Injector({
-  sessionId: sessionArg,
-  pollIntervalMs: 2000,
-  pollTimeoutMs: 180000,
-  onOCRestarted: async (newPort) => {
-    // v0.4: oc 重启后注入"你醒了"（续命消息）
-    // oc 启动后约 20 秒进入对话窗口，直接等 25 秒再注入
-    // 不探测 /session（health monitor 的 execSync 会阻塞 fetch，导致探测超时）
-    console.log(`[main] oc 重启检测 (port=${newPort})，等 25 秒后注入续命消息...`);
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    await sleep(25000);
-
-    // 重新读密码 + 找当前 oc 端口（端口可能在 25 秒内又变了）
-    let targetPort = newPort;
-    const ports = injector._findPortsByProcess("OpenCode.exe");
-    if (ports.length > 0) {
-      targetPort = ports[ports.length - 1]; // 取最后一个（通常是最新启动的）
-      if (targetPort !== newPort) {
-        console.log(`[main] 端口变化 ${newPort} -> ${targetPort}（25 秒内）`);
-      }
-    }
-
-    const pwdData = injector._readPasswordFile();
-    if (!pwdData?.password) {
-      console.warn("[main] 密码文件不可用，放弃续命注入");
-      return;
-    }
-    const auth = "Basic " + Buffer.from(`opencode:${pwdData.password}`).toString("base64");
-    const sid = injector.sessionId || injector.loadSession();
-
-    console.log(`[main] 注入续命消息 (port=${targetPort}, sid=${sid?.slice(0,16)}...)`);
-    // v0.5: 用意图系统渲染续命消息（intent=survival, source=furina）
-    const rendered = renderInjectMessage("你醒了。", { intent: "survival", source: "furina" });
-    // 重试 3 次
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        const body = JSON.stringify({ parts: [{ type: "text", text: rendered }] });
-        const r = await fetch(`http://127.0.0.1:${targetPort}/session/${sid}/prompt_async`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: auth },
-          body,
-          signal: AbortSignal.timeout(30000),
-        });
-        if (r.status === 204 || r.ok) {
-          console.log(`[main] 续命消息已注入 (第 ${attempt} 次成功, intent=survival)`);
-          return;
-        }
-        throw new Error(`HTTP ${r.status}`);
-      } catch (e) {
-        console.warn(`[main] 续命注入第 ${attempt} 次失败: ${e.message?.slice(0, 60)}`);
-        if (attempt < 3) await sleep(5000);
-      }
-    }
-    console.warn("[main] 续命消息 3 次都失败");
-  },
+  maxQueueSize: 500,
 });
 
-// v0.4: health check loop（15s 间隔，fetch 失败立刻重新匹配）
-injector.startHealthMonitor(15000);
+const bus = new EventBus();
 
-// 记忆区
-const memory = new Memory(injector, {
-  maxMessages: 40,
-  maxTokens: 30000,
-});
+const KORINA_PORT = (() => {
+  const raw = process.env.KORINA_PORT;
+  if (!raw) return 9999;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0 || n > 65535) {
+    console.warn(`[main] 无效 KORINA_PORT=${raw}，回落 9999`);
+    return 9999;
+  }
+  return n;
+})();
 
-// 预设系统
+const http = new HTTPRouter({ port: KORINA_PORT });
+
 const presets = new Presets();
-console.log(`  预设: 模式=${presets.get("mode")}, 空闲阈值=${presets.get("idleThresholdMs") / 1000}s`);
 
-// 健康检测器
-const healthChecker = new HealthChecker(injector, presets, {
-  onIdle: null, // 会被 ModeManager 接管
-  onStale: (round, msg) => console.log(`[main] 戳醒第${round + 1}轮: ${msg}`),
-  onDead: (reason) => {
-    console.error(`[main] OC 判定死亡 (${reason})，furina 主动拉起 oc`);
-    injector.spawnOC();
-  },
-  onRecover: () => console.log("[main] OC 恢复响应"),
+// v0.9.3: 注册 preset HTTP 端点（MCP server 依赖）
+http.post("/preset", (body) => {
+  if (!body?.key) throw new Error("需要 { key, value }");
+  presets.set(body.key, body.value);
+  return { ok: true, key: body.key };
+});
+http.get("/presets", () => presets.getAll());
+
+// v0.9.4: 优雅关闭端点（补齐此前缺失的 /shutdown）
+// 注：Windows 上对后台 node 发 SIGINT/SIGTERM 跨控制台组不可达，
+// 故提供 HTTP 触发，确保 loader.shutdown() 回收所有 sidecar 后再退出。
+http.post("/shutdown", async () => {
+  gracefulShutdown("HTTP /shutdown");
+  return { ok: true, msg: "shutting down" };
 });
 
-// 模式管理器
-const modeManager = new ModeManager(injector, presets, healthChecker);
+// 迁移 presets 文件路径（core/presets.mjs 的相对路径要调整）
+presets._fixPath?.();
 
-// 感知层：文件 watcher（首个感知器）
-const sensors = [];
-if (watchPaths.length > 0) {
-  const fw = new FileWatcher(queue, {
-    paths: watchPaths,
-    debounceMs: 1000,
-  });
-  sensors.push(fw);
-  console.log(`  感知层: file-watcher 监听 ${watchPaths.length} 路径`);
+const loader = new PluginLoader({ queue, bus, http, presets });
+// v0.9.5.5: 把 mode 暴露给所有插件（ctx.korina.mode 可读）
+loader.korina.mode = KORINA_MODE;
+// v0.9.10 (L5.1 manual #34): 把 port 暴露给所有插件（Inject / SessionBindingStore 用）
+loader.korina.port = KORINA_PORT;
+// v0.9.20 (L5.4 shadow mode manual #45): instanceRole = "main"（主实例，9999）| "shadow"（备用实例，非 9999）
+//   shadow 实例不 fire 任何主动 agent loop（保留 HTTP 端点 + 被动查询 + watchdog 拉起）
+//   治 L5.0-5.3 治不到的"10001 自言自语"问题（KOKO 在 9999 对话时 10001 timer 注入到 oc 干扰）
+//
+// v0.9.22 (manual #50): 接受 KORINA_INSTANCE_ROLE env 覆盖硬编码的"9999=main"。
+//   修 korina-1测 对话发现的硬编码 bug：10001 想开全部插件时强制降级为 shadow。
+//   优先级：env > 端口推断 > 默认值。
+const _explicitRole = process.env.KORINA_INSTANCE_ROLE;
+if (_explicitRole === "main" || _explicitRole === "shadow") {
+  loader.korina.instanceRole = _explicitRole;
 } else {
-  console.log("  感知层: 未指定 --watch，无文件感知器（仅手动注入模式）");
+  loader.korina.instanceRole = KORINA_PORT === 9999 ? "main" : "shadow";
 }
+console.log(`[main] instanceRole: ${loader.korina.instanceRole} (port=${KORINA_PORT})`);
 
-// 感知层：timer sensor（v0.2 新增）—— 周期性触发用于 dogfooding
-// 默认启用，周期可由 presets.timer.intervalMs 配置
-const timerConfig = presets.get("timer") || {};
-const ts = new TimerSensor(queue, {
-  presets, // v0.7.10.2: 传 presets 引用，支持热加载
-  isOCIdle: () => injector.isOCIdleAsync(30000), // v0.7.10: oc 闲置才发心跳
-  maxIdleRetries: 3, // oc 连续忙 3 轮后强制发（兜底）
+// v0.9.6: 能力清单端点。MCP/文档不应再凭空声明能力，先以 HTTP 实际路由为真相源。
+http.get("/capabilities", () => ({
+  version: KORINA_VERSION,
+  buildDate: KORINA_BUILD_DATE,
+  mode: KORINA_MODE,
+  httpRoutes: http.listRoutes(),
+  plugins: loader.list(),
+}));
+
+// ============================================================
+// v0.9.6 (Milestone 4.2): 进程心跳 — 委托给 ProcessHeartbeat
+// 写 logs/heartbeat.json 给 watchdog 看，schema 与 v0.9.3 兼容
+// ============================================================
+const processHeartbeat = new ProcessHeartbeat({
+  logsDir: LOGS_DIR,
+  port: KORINA_PORT, // v0.9.8 (L5.0 manual #30): 文件按 port 命名，多实例独立心跳
+  version: KORINA_VERSION,
+  mode: KORINA_MODE,
+  intervalMs: 2000,
+  getLoader: () => loader,
+  getQueue: () => queue,
 });
-sensors.push(ts);
-console.log(`  感知层: timer-sensor ${ts.enabled ? "启用" : "禁用"} interval=${ts.intervalMs}ms autoRecall=${ts.autoRecall} idleCheck=on`);
 
 // ============================================================
-// 心跳写入（给看门狗用）
+// v0.9.7 (manual #17): OC 链路健康探测器 — 给 /status 输出 ocReachable
+// 弥补"heartbeat 不依赖 oc"的盲点：korina 自己能感知 oc 端点是否真活
 // ============================================================
-
-function writeHeartbeat() {
-  const hb = {
-    ts: Date.now(),
-    pid: process.pid,
-    stats: {
-      queue: queue.getStats(),
-      memory: memory.getStats(),
-      mode: modeManager.getStats(),
-      presets: {
-        mode: presets.get("mode"),
-        idleThresholdMs: presets.get("idleThresholdMs"),
-      },
-      health: {
-        tracking: healthChecker.tracking,
-        lastState: healthChecker.lastState,
-        pokeRound: healthChecker.pokeRound,
-      },
-    },
-  };
+function _readOcAuth() {
+  // 从 logs/oc-password.txt 读 OpenCode Basic auth（oc /status 需要）
+  const pwdFile = join(LOGS_DIR, "oc-password.txt");
+  if (!existsSync(pwdFile)) return null;
   try {
-    writeFileSync(HEARTBEAT_FILE, JSON.stringify(hb));
-  } catch (e) {
-    console.error("[heartbeat] 写入失败:", e.message);
+    const data = JSON.parse(readFileSync(pwdFile, "utf-8"));
+    if (!data.password) return null;
+    return "Basic " + Buffer.from(`opencode:${data.password}`).toString("base64");
+  } catch {
+    return null;
   }
 }
 
-setInterval(writeHeartbeat, 2000);
-writeHeartbeat(); // 立即写一次
+const ocHealth = new OcHealthChecker({
+  // v0.9.23 (manual #22 B1 修复): baseUrl 动态跟随 korina.ocBase
+  // oc-injector plugin init 后 korina.ocBase 才有值；ocHealth 每次 probeOnce 时调本函数拿最新
+  // 老 bug: 之前硬编码 baseUrl=7574，oc 重启换端口后 ocHealth 持续误报 alive=false
+  getBaseUrl: () => loader.korina?.ocBase,
+  baseUrl: "http://127.0.0.1:7574",  // 兜底（ocBase 还没设时用）
+  intervalMs: 10_000,
+  timeoutMs: 3_000,
+  auth: _readOcAuth(),
+});
+loader.korina.ocHealth = ocHealth;
 
 // ============================================================
-// 事件调度：从队列取事件 -> 注入 oc -> 记忆
+// 主函数
 // ============================================================
+async function main() {
+  // 1. 加载插件
+  await loader.loadAll();
+  await loader.initAll();
 
-async function dispatchHandler(event) {
-  console.log(`\n[dispatch] ${event.source}/${event.type} (priority=${event.priority})`);
+  // 2. 启动 HTTP server
+  http.start();
 
-  // v0.7.10: mode 过滤 —— silent/idle/task 模式不响应 file.changed
-  const currentMode = presets.get("mode") || "silent";
-  if (event.type === "file.changed" && !["observe", "self-talk", "find-work"].includes(currentMode)) {
-    console.log(`[dispatch] 当前模式 ${currentMode}，忽略 file.changed`);
+  // 3. 启动 process heartbeat（让 watchdog 立即看到一次）
+  processHeartbeat.writeOnce();
+  processHeartbeat.start();
+
+  // v0.9.7 (manual #17): 启动 OC 链路健康探测（每 10s 探一次 /status）
+  ocHealth.start();
+
+  console.log("\n=== korina 就绪，等待事件 ===\n");
+
+// 4. 启动事件队列调度
+    // dispatchHandler 由 oc-injector 插件通过 korina.dispatchHandler 提供
+    // v0.9.22 (manual #49): 删 scheduler mode 分支（强绑定 worker 模式，dispatchHandler 必须有）
+    const dispatchHandler = loader.korina.dispatchHandler;
+    if (!dispatchHandler) {
+      console.error("[main] 无 dispatchHandler（oc-injector 插件未加载？），退出");
+      process.exit(1);
+    }
+    await queue.start(dispatchHandler, 200);
+}
+
+// ============================================================
+// 优雅退出
+// ============================================================
+let _shuttingDown = false;
+async function gracefulShutdown(signal) {
+  if (_shuttingDown) {
+    console.log(`[korina] 已在关闭中（${signal}），忽略重复触发`);
     return;
   }
+  _shuttingDown = true;
+  console.log(`\n[korina] 收到 ${signal}，开始清理...`);
 
-  // v0.3: timer 触发时自动 recall，维护 recentRecall（让 furina 持续有上下文）
-  if (event.type === "timer.tick" && event.payload?.autoRecall) {
-    console.log(`[dispatch] timer.tick 自动 recall...`);
+  try { queue.stop(); } catch {}
+  try {
+    await Promise.race([
+      loader.shutdown().catch((e) => console.warn("[korina] loader.shutdown 出错:", e?.message)),
+      new Promise((r) => setTimeout(() => {
+        console.warn("[korina] loader.shutdown 超时(8s)，强制继续退出");
+        r();
+      }, 8000)),
+    ]);
+  } catch (e) {
+    console.warn("[korina] loader.shutdown 包裹失败:", e?.message);
+  }
+
+  // v0.9.6 (Milestone 5.2): SidecarRegistry 统一关所有 sidecar
+  if (processHeartbeat) processHeartbeat.stop();
+  if (loader.korina?.sidecarRegistry) {
     try {
-      const recalled = await memory.recall(null, { last: memory.recallWindow });
-      if (recalled) {
-        memory.setRecentRecall(recalled);
-        console.log(`[dispatch] 自动 recall 完成（${recalled.length} 字符）`);
-      }
+      await loader.korina.sidecarRegistry.stopAll(5000);
     } catch (e) {
-      console.warn(`[dispatch] 自动 recall 失败: ${e.message?.slice(0, 100)}`);
+      console.warn("[korina] sidecarRegistry.stopAll 包裹失败:", e?.message);
     }
+  } else {
+    console.warn("[korina] 未发现 sidecarRegistry，跳过 stopAll");
   }
 
-  // v0.5: 解析 event 的 intent / source（payload 里透传）
-  const intent = event.payload?.intent || inferIntent(event);
-  const source = event.payload?.source || event.source || "furina";
+  // v0.9.7 (manual #17): 停 OC 链路健康探测器
+  if (ocHealth) ocHealth.stop();
+  
+  // v0.9.3: 等子进程优雅退出
+  console.log("[korina] 等待子进程退出（最多5秒）...");
+  await new Promise(r => setTimeout(r, 5000));
+  
+  try { http.stop(); } catch {}
 
-  // 构造注入给 oc 的消息（v0.5: 用 intent 系统而非硬编码标签）
-  let message = formatEventMessage(event);
+  if (_logFlushInterval) clearInterval(_logFlushInterval);
+  if (_logFlushTimer) clearTimeout(_logFlushTimer);
 
-  // v0.2: 如果有近期工作记忆（来自 checkpoint 后的 recall），附加到 message
-  // 这样 oc 在压缩后能自动恢复上下文，无需再问"刚才说了什么"
-  const recall = memory.getRecentRecall();
-  if (recall) {
-    const recallBlock = `\n\n[furina 近期记忆]\n${recall}\n[furina 记忆结束]`;
-    message = message + recallBlock;
-    console.log(`[dispatch] 已附加工作记忆（${recall.length} 字符）`);
-    // 一次性使用，避免后续 dispatch 重复附加
-    memory.clearRecentRecall();
-  }
+  try { _flushLog(); } catch {}
 
-  console.log(`[dispatch] 注入 intent=${intent} source=${source}: ${message.slice(0, 80)}...`);
-
-  // 注入并等待回复（v0.5: 透传 intent/source 给 injector）
-  const reply = await injector.injectAndWait(message, (progress) => {
-    if (progress.elapsed % 20000 === 0) {
-      console.log(`  等待中... ${progress.elapsed / 1000}s state=${progress.state}`);
-    }
-  }, { intent, source });
-
-  console.log(`[dispatch] 回复 (${reply.text.length} 字, state=${reply.state}):`);
-  console.log(reply.text.slice(0, 300));
-
-  // 记忆区记录
-  const compressed = await memory.record(message, reply.text);
-  if (compressed) {
-    console.log("[dispatch] 记忆区触发了压缩检查点");
-  }
-
-  // 写心跳（带最新状态）
-  writeHeartbeat();
+  console.log("[korina] 清理完成，退出");
+  setTimeout(() => process.exit(0), 300);
 }
 
-/**
- * v0.5: 从 event 类型推断默认 intent
- */
-function inferIntent(event) {
-  if (event.type === "file.changed") return "system";      // 文件变化是系统感知
-  if (event.type === "timer.tick") return "auto-recall";   // 定时检查
-  if (event.type === "manual.inject") return "user";        // 手动注入 = 用户
-  return "system";
-}
-
-/**
- * 把感知层事件格式化成 oc 能理解的注入消息
- * v0.5: 返回纯正文（标签由 injector.renderInjectMessage 统一加）
- */
-function formatEventMessage(event) {
-  switch (event.type) {
-    case "file.changed":
-      return `文件变化：${event.payload.event} ${event.payload.path} (size=${event.payload.size})。\n请判断这个变化是否需要处理。如果需要，用可用工具分析或操作；如果不需要，回复 [furina] 忽略。`;
-
-    case "manual.inject":
-      return event.payload.text;
-
-    case "timer.tick":
-      return event.payload.message || "例行检查";
-
-    default:
-      return `事件 ${event.type}: ${JSON.stringify(event.payload).slice(0, 200)}`;
-  }
-}
-
-// ============================================================
-// 启动
-// ============================================================
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-async function retry(fn, label, maxAttempts, intervalMs) {
-  for (let i = 0; i < maxAttempts; i++) {
-    try {
-      return await fn();
-    } catch (e) {
-      if (i === 0) console.log(`[init] ${label} 未就绪: ${e.message}，等待重试...`);
-      await sleep(intervalMs);
-    }
-  }
-  throw new Error(`${label} 等待超时`);
-}
-
-async function main() {
-  // 1. 发现 oc server（等 oc server 就绪，最多 120s）
-  console.log("\n[init] 等待 oc server 就绪...");
-  const server = await retry(() => injector.discover(), "oc server", 60, 2000);
-  console.log(`  server: ${server.base}`);
-
-  // 2. 解析 session（等 session 创建，最多 60s）
-  console.log("[init] 等待 session 就绪...");
-  const sid = await retry(() => injector.resolveSession(), "session", 30, 2000);
-  console.log(`  session: ${sid}`);
-
-  // v0.4: furina 启动时不注入恢复消息
-  // 续命消息只由 onOCRestarted 回调触发（oc 重启时）
-  // furina 重启 = 升级，oc 没死，冬蕴雪没变，不需要注入
-
-  // 3. 启动感知器
-  for (const sensor of sensors) {
-    console.log(`[init] 启动 ${sensor.name}...`);
-    await sensor.start();
-  }
-
-  // 3.5 启动控制通道（运行时热切换 session / 手动注入 / 查看状态 / 预设管理）
-  const control = new ControlChannel({
-    injector,
-    queue,
-    memory,
-    sensors,
-    presets,
-    modeManager,
-    healthChecker,
-    onAddWatch: (paths) => {
-      // 动态添加文件监听
-      const fw = new FileWatcher(queue, { paths, debounceMs: 1000 });
-      fw.start();
-      sensors.push(fw);
-    },
-  });
-  control.start();
-
-  // 4. 启动事件调度循环
-  console.log("\n[init] 启动事件调度循环");
-  console.log("=== furina 就绪，等待感知事件 ===\n");
-
-  // v0.4: 启动 HTTP server（让 oc 能调 furina 工具集）
-  const workflowPresets = new WorkflowPresets();
-  const httpServer = new FurinaHTTPServer({
-    injector,
-    queue,
-    memory,
-    presets,
-    workflowPresets,
-    port: 9999,
-  });
-  httpServer.start();
-
-  // v0.4: 启动工作汇报系统（每小时生成一份）
-  const worklog = new WorkLog({ intervalMs: 60 * 60 * 1000 });
-  worklog.start();
-
-  queue.on("push", (e) => {
-    console.log(`[queue+] ${e.source}/${e.type} (size=${queue.size})`);
-  });
-  queue.on("dispatch", (e) => {
-    console.log(`[queue>] ${e.source}/${e.type}`);
-  });
-  queue.on("drop", (info) => {
-    console.warn(`[queue!] 丢弃: ${info.reason} ${info.source}/${info.type}`);
-  });
-  queue.on("error", ({ event, error }) => {
-    console.error(`[queue!] 处理错误: ${event.source}/${event.type}: ${error.message}`);
-  });
-
-  // 启动调度（阻塞）
-  await queue.start(dispatchHandler, 200);
-}
-
-// 优雅退出
-process.on("SIGINT", () => {
-  console.log("\n[furina] 收到 SIGINT，停止...");
-  for (const s of sensors) s.stop();
-  queue.stop();
-  setTimeout(() => process.exit(0), 500);
-});
-
-process.on("SIGTERM", () => {
-  console.log("\n[furina] 收到 SIGTERM，停止...");
-  for (const s of sensors) s.stop();
-  queue.stop();
-  setTimeout(() => process.exit(0), 500);
-});
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 
 main().catch((e) => {
-  console.error("[furina] 致命错误:", e.message);
+  console.error("[korina] 致命错误:", e.message);
   console.error(e.stack);
   process.exit(1);
 });

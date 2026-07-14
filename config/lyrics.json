@@ -1,0 +1,36 @@
+{
+  "font": {
+    "family": "Microsoft YaHei",
+    "file": "assets/fonts/Aa百物语.ttf",
+    "currentSize": 20,
+    "currentBold": true,
+    "nextSize": 11,
+    "nextBold": false
+  },
+  "color": {
+    "current": "#D4A5FF",
+    "next": "rgba(212, 165, 255, 150)",
+    "background": "rgba(0, 0, 0, 0)",
+    "textShadow": "0 0 4px rgba(0, 0, 0, 220), 0 0 2px rgba(0, 0, 0, 180)"
+  },
+  "window": {
+    "width": 800,
+    "height": 180,
+    "marginX": 20,
+    "marginY": 10,
+    "radius": 15,
+    "position": "bottom-right",
+    "clickThrough": false
+  },
+  "audio": {
+    "volume": 0.8
+  },
+  "poll": {
+    "intervalMs": 500
+  },
+  "text": {
+    "waiting": "少女祈祷中...",
+    "idle": "少女祈祷中...",
+    "maxChars": 200
+  }
+}

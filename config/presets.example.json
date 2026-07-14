@@ -1,0 +1,79 @@
+{
+  "mode": "task",
+  "timer": {
+    "enabled": true,
+    "intervalMs": 600000,
+    "initialDelayMs": 60000,
+    "message": "[heartbeat] {time} | oc={ocState} | tasks={tasks} | queue={queueSize}\n\n[沉思引导] {think}\n\n注意：这是心跳沉思时间，只思考不动手改代码/文件。但如果用户的指令涉及修改 korina 配置（心跳间隔、模式、TTS 等），可以调用 korina HTTP 工具执行：\n- POST /heartbeat/interval {minutes:N} -- 改心跳间隔\n- POST /inject {text} -- 注入消息\n- POST /switch-session {sessionId} -- 切换对话\n- GET /tts/status -- TTS 状态\n- GET /modes -- 模式列表\n简短回答即可（3-5 句）。",
+    "priority": 20,
+    "autoRecall": false
+  },
+  "idleThresholdMs": 300000,
+  "selfTalkPrompts": [
+    "继续上一步的思考，看看有没有遗漏",
+    "总结一下刚才做了什么，接下来做什么",
+    "检查一下当前任务有没有边界情况没处理"
+  ],
+  "findWorkPrompts": [
+    "检查 watch 目录有没有新文件变化",
+    "看看 onlyoc 当前文档状态，有没有需要处理的",
+    "回顾最近的工作，有没有可以优化的地方"
+  ],
+  "healthCheck": {
+    "staleStateMs": 120000,
+    "pokeMessages": [
+      "你还在吗？如果卡住了请回复 [heartbeat] 卡住了",
+      "尝试重新聚焦：请总结当前任务状态和下一步计划"
+    ],
+    "pokeIntervalMs": 60000,
+    "maxPokeRounds": 2,
+    "restartRecoveryMs": 30000
+  },
+  "observe": {
+    "interveneKeywords": [
+      "heartbeat",
+      "心跳",
+      "help",
+      "救命"
+    ],
+    "interveneMessage": "[heartbeat] 检测到呼叫，我在线，有什么需要？"
+  },
+  "heartbeatPrompts": [
+    "回顾刚才做了什么，有没有遗漏或可以改进的地方？",
+    "当前项目的整体状态如何？有没有潜在的风险点？",
+    "最近的工作中有没有发现反复出现的问题？根源是什么？",
+    "如果用户现在问你'当前进度'，你能给出清晰的回答吗？试着组织一下。",
+    "检查一下有没有被忽略的边界情况或异常路径？",
+    "回顾最近的 bug 修复，有没有引入新的隐患？",
+    "当前架构有没有可以简化的地方？哪些部分过度复杂了？",
+    "如果要让另一个 agent 接手，你能给出清晰的交接说明吗？",
+    "最近的 TTS/SSE/注入链路稳定吗？有没有性能瓶颈？",
+    "用户最近的需求模式是什么？有没有可以提前准备的？"
+  ],
+  "modes": {
+    "silent": "完全不主动注入，agent 完全自由",
+    "idle": "只发心跳（[heartbeat] {time}），不派活",
+    "task": "心跳 + 派活提示（[heartbeat task] 去检查 X）",
+    "observe": "心跳 + 文件变化感知 + 系统通知"
+  },
+  "watchPath": "./src",
+  "tts": {
+    "enabled": true,
+    "endpoint": "https://api.minimaxi.com/v1/t2a_v2",
+    "apiKey": "",
+    "model": "speech-2.8-turbo",
+    "voiceId": "Chinese (Mandarin)_IntellectualGirl",
+    "voiceSetting": {
+      "speed": 1,
+      "vol": 1,
+      "pitch": 0
+    },
+    "audioSetting": {
+      "sample_rate": 32000,
+      "bitrate": 128000,
+      "format": "mp3",
+      "channel": 1
+    },
+    "outputDir": "logs/tts"
+  }
+}

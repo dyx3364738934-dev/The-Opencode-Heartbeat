@@ -61,7 +61,7 @@ export class HealthChecker {
     if (!this.tracking) return;
 
     const hc = this.presets.get("healthCheck");
-    const pollInterval = 5000; // 5 秒轮询一次
+    const pollInterval = hc.pollIntervalMs || 5000; // v0.8.7: 从配置读取轮询间隔
 
     try {
       const { base, headers } = await this.injector.discover();
@@ -109,8 +109,9 @@ export class HealthChecker {
       // 判断状态
       const staleMs = now - this.lastChangeTime;
 
-      if (state === "completed" || state === "") {
-        // 完成或无 state（旧消息）-> 检查是否空闲
+      if (state === "completed") {
+        // v0.8.7: 修复 #17 -- 只有 state=completed 才算完成（空 state 可能是消息创建中）
+        // 检查是否空闲
         const idleThreshold = this.presets.get("idleThresholdMs");
         const idleMs = now - this.injectedTime;
         if (idleMs > idleThreshold && this.pokeRound === 0) {
@@ -138,6 +139,8 @@ export class HealthChecker {
       console.warn(`[health] 轮询错误: ${e.message}`);
     }
 
+    // v0.8.7: 修复 #18 -- 设置 timer 前检查 tracking（防止 stopTracking 后残留 timer）
+    if (!this.tracking) return;
     this.pollTimer = setTimeout(() => this._poll(), pollInterval);
   }
 
@@ -159,8 +162,12 @@ export class HealthChecker {
     try {
       await this.injector.inject(msg);
       this.pokeRound++;
-      // 戳醒后重置变化时间，给 oc 时间响应
-      this.lastChangeTime = Date.now();
+      // v0.8.7: 修复 #16 -- 戳醒后用 pokeIntervalMs 而非 staleStateMs 作为下次戳醒间隔
+      // 原来直接 lastChangeTime = Date.now()，下次戳醒要再等 staleStateMs（120s），实际间隔翻倍
+      // 现在回退 lastChangeTime 使 staleMs = staleStateMs - pokeIntervalMs，下次轮询在 pokeIntervalMs 后触发戳醒
+      const pokeInterval = hc.pokeIntervalMs || 60000;
+      const backoff = Math.max(0, (hc.staleStateMs || 120000) - pokeInterval);
+      this.lastChangeTime = Date.now() - backoff;
     } catch (e) {
       console.error(`[health] 戳醒注入失败: ${e.message}`);
       // 注入都失败了，oc 可能已经挂了

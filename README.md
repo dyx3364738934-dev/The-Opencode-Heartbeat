@@ -1,29 +1,105 @@
-# The Opencode Heartbeat
+# korina — Opencode 的心跳底座
 
-**AI agent 的外置心跳 — 让 OpenCode 跨对话延续身份、异步执行长期任务、自动从死亡中复活**
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Node >=20](https://img.shields.io/badge/node-%3E%3D20-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.9.28-blue.svg)](CHANGELOG.md)
 
-> 版本: `v0.7.10-beta` · License: MIT · Node.js ≥ 20
+> 给 [Opencode](https://github.com/sst/opencode) 装一颗会跳的心脏——心跳调度、消息注入、续命守护、多会话管理、TTS 语音输出、Whisper 语音输入、桌面歌词。
 
-[English](#english) | [中文文档](#中文文档)
+## korina 是什么
 
----
+korina 是一个为 Opencode（开源 AI 编码助手桌面版）设计的**长时运行伴侣进程**。它在 Opencode 旁边常驻，解决几个核心问题：
 
-## 中文文档
+- **心跳调度**——按配置间隔（5 分钟、15 分钟、1 小时等）给 AI 注入"环境快照"（系统状态 + 前台窗口 + Koko 活跃度 + 引导提示词），让 AI 有时间感、环境感知、主动权判据
+- **消息注入**——把外部消息（心跳 / 语音转写 / 文件变化 / 模式切换）通过 Opencode 的 prompt 端点送进当前对话
+- **续命守护**——Opencode 进程挂了自动拉起；端口漂移自动跟随；密码过期自动重读
+- **多会话管理**——同时绑定多个 Opencode 会话，心跳可白名单投递到指定会话不扰民
+- **TTS 语音输出**——把 AI 回复流式分段合成语音，可选播放到桌面歌词浮窗
+- **Whisper 语音输入**——按住热键说话（PTT），Whisper 转写后注入到 Opencode
 
-### 这是什么
+## 核心特性
 
-**Opencode Heartbeat** 是一个外置元逻辑守护进程，**与 OpenCode 桌面版配对运行**。它解决了 AI agent 最根本的痛点：
+### 心跳系统（v0.9.28 manual #53 单轨设计）
 
-- **我刚才在干嘛？** → 跨对话记忆继承
-- **Koko 离开时我能做什么？** → 异步长期任务
-- **OC 崩溃了怎么办？** → 自动拉起 + 续命注入
-- **我忘了之前的自己？** → 人格延续（自我描述 + 记忆 checkpoint）
+```
+AI 回复完成 ──┐
+              ├──> 归零 lastFireAt
+korina 注入 ──┘
+              │
+              ▼
+   poll 检查 now - lastFireAt > intervalMs ?
+              │ 是
+              ▼
+        fire 心跳消息
+```
 
-**核心定位**：heartbeat 不是"调度多 agent"，也不是"AGI 框架"。它是**让单个 agent 活得更久的心脏**——给它定时心跳、记忆库、自动复活能力。
+**设计哲学**：心跳是**对话停滞信号**，不是定时打扰。
+- 你和 AI 对话时——AI 持续输出 → 持续归零 → 永不 fire
+- 你沉默 N 分钟——计时走完 → fire 一次心跳，AI 收到"距离上次对话 N 分钟"的信号
 
-### 5 分钟快速开始
+**信号源**：监听 Opencode 的 SSE 事件流（`message.part.updated/delta/updated`），任何 assistant 输出（reasoning / tool / text / delta）都触发归零。1 秒节流避免高频 delta 浪费 CPU。
 
-#### 1. 安装
+### 插件化架构
+
+12 个内置插件，按依赖图加载，可独立启停：
+
+| 插件 | 职责 |
+|---|---|
+| `oc-injector` | Opencode 发现 + 密码匹配 + 消息注入 |
+| `sse-tts-pipeline` | 监听 Opencode SSE 流 + 桥接事件到 EventBus |
+| `sidecar-launcher` | 注册 + 健康检查 sidecar 进程 |
+| `desktop-lyrics` | pygame 桌面歌词浮窗（显示 TTS 实时字幕） |
+| `file-watcher` | 监听文件变化（chokidar）触发任务 |
+| `health` | 进程健康检查 + oc 可达性检测 |
+| `memory` | 长对话记忆压缩 + recall 注入 |
+| `mode-router` | 关键词检测切换 AI 模式（idle/task/observe） |
+| `timer` | 心跳定时器（manual #53 单轨归零） |
+| `tts-tool` | AI 可调的 TTS 端点（`/tts/speak`） |
+| `voice-input` | Whisper 语音输入（PTT 模式） |
+| `worklog` | 定期工作汇报归档 |
+
+### 多种启动方式
+
+```powershell
+# 推荐：可见 cmd 窗口（Alt+Tab 切到 "korina v0.9.28" 看实时日志）
+.\start.ps1
+
+# 命令行管理（start/stop/status/sessions/rebind/inject/summarize/restart）
+.\korina.ps1 start
+.\korina.ps1 status
+
+# 后台守护（看门狗拉起）
+.\start-watchdog.bat
+```
+
+### HTTP API（端口 9999，Basic Auth）
+
+```
+GET  /status                    服务状态
+POST /shutdown                  优雅关闭
+GET  /sessions                  列出 oc 所有 session
+POST /rebind                    热切换到最新 oc session
+POST /inject/intent             注入消息
+GET  /heartbeat/interval        查心跳间隔
+POST /heartbeat/interval        改心跳间隔（minutes/seconds/ms）
+POST /heartbeat/pause           暂停心跳
+POST /heartbeat/resume          恢复心跳
+POST /voice-input/start         拉起语音输入 sidecar
+POST /voice-input/bind          锁定语音到指定 session
+POST /tts/speak                 TTS 朗读
+POST /session/follow-heartbeat  心跳白名单 +session
+```
+
+## 安装
+
+### 前置要求
+
+- Windows 10/11（依赖 PowerShell + Win32 API）
+- Node.js ≥ 20
+- Python ≥ 3.10（sidecar 用）
+- Opencode 桌面版
+
+### 步骤
 
 ```bash
 git clone https://github.com/dyx3364738934-dev/The-Opencode-Heartbeat.git
@@ -31,365 +107,135 @@ cd The-Opencode-Heartbeat
 npm install
 ```
 
-#### 2. 安装 opencode-bootstrap 插件
-
-把以下文件复制到 `~/.config/opencode/plugins/`：
+### 配置
 
 ```bash
-# Windows
-copy plugins\opencode-bootstrap.mjs %USERPROFILE%\.config\opencode\plugins\
+# 1. 复制示例配置
+copy config\presets.example.json config\presets.json
 
-# macOS / Linux
-cp plugins/opencode-bootstrap.mjs ~/.config/opencode/plugins/
+# 2. 编辑 config\presets.json：
+#    - tts.apiKey: 你的 MiniMax API key（https://api.minimaxi.com）
+#    - watchPath: 你想让 file-watcher 监听的目录
+#    - timer.intervalMs: 心跳间隔（默认 180000 = 3 分钟）
+
+# 3. （可选）配置语音输入
+pip install keyboard openai-whisper sounddevice numpy
 ```
 
-**插件的作用**：当 OpenCode 启动时，自动把密码泄露给 heartbeat，并拉起 heartbeat 进程。这是 heartbeat 唯一的兜底机制（heartbeat 死了没人拉起它自己，必须 oc 重启触发插件）。
+### 启动 Opencode → 启动 korina
 
-#### 3. 配置 OpenCode MCP
+```powershell
+# 1. 启动 Opencode 桌面版（korina 会自动发现并匹配密码）
 
-编辑 `~/.config/opencode/opencode.jsonc`：
-
-```json
-{
-  "mcp": {
-    "heartbeat": {
-      "type": "local",
-      "command": ["python", "<heartbeat 路径>\\mcp\\heartbeat_mcp_server.py"],
-      "enabled": true
-    }
-  }
-}
+# 2. 启动 korina（推荐 start.ps1，创建可见 cmd 窗口）
+.\start.ps1
 ```
 
-#### 4. 启动
+korina 会：
+1. 找到 Opencode 进程 + 端口
+2. 读 `logs/oc-password.txt`（Opencode 启动时泄露）
+3. 绑定到当前活跃 session
+4. 启动所有 sidecar（desktop-lyrics 浮窗自动弹出）
+5. 启动心跳定时器
+
+## 使用
+
+### 语音输入（PTT 模式）
+
+1. AI 调用 `POST /voice-input/start` 拉起 sidecar
+2. **按住 Alt 键**说话
+3. **松开**自动 Whisper 转写 + 注入到 Opencode
+
+### 心跳调参
+
+```powershell
+# 5 分钟间隔（陪伴感强）
+curl -X POST http://127.0.0.1:9999/heartbeat/interval `
+  -u "opencode:$pwd" -H "Content-Type: application/json" `
+  -d '{"minutes": 5}'
+
+# 暂停心跳
+curl -X POST http://127.0.0.1:9999/heartbeat/pause -u "opencode:$pwd"
+```
+
+### 桌面歌词
+
+desktop-lyrics sidecar 启动时自动弹出 pygame 窗口，显示 TTS 实时字幕。窗口位置可拖动，自动保存到 `config/lyrics-position.json`。
+
+## 项目结构
+
+```
+korina/
+├── src/
+│   ├── main.mjs                # 入口
+│   ├── core/                   # 核心模块（event-bus/queue, http-router, plugin-loader, presets, sidecar-registry）
+│   ├── modules/heartbeat/      # 心跳模板渲染 + 系统传感器
+│   ├── lifeline/               # 续命运行时 + 注册表
+│   ├── state/                  # session 绑定存储
+│   ├── injector.mjs            # Opencode 注入器
+│   ├── injector-*.mjs          # 注入器子模块（discovery/http-ops/session-selection）
+│   ├── sse-listener.mjs        # Opencode SSE 流监听
+│   ├── tts.mjs                 # MiniMax TTS 客户端
+│   └── ...
+├── plugins/                    # 12 个业务插件
+├── watchdog/                   # 看门狗
+├── mcp/                        # MCP 服务器（Python）
+├── config/                     # 配置（presets.json 不上传）
+├── desktop-lyrics.py           # 桌面歌词 sidecar
+├── voice-input.py              # 语音输入 sidecar
+├── start.ps1 / korina.ps1      # PowerShell 启动脚本
+├── start-watchdog.bat          # 看门狗启动
+└── package.json
+```
+
+## 测试
 
 ```bash
-# 启动 OpenCode 桌面版（heartbeat 会通过 plugin 自动拉起）
-# 或者手动启动 heartbeat
-node src/main.mjs --watch C:\Users\YourName\Desktop
+npm test                         # E2E 测试
+node tests/test-e2e.mjs          # 同上
+python tests/test_voice_input_hotkey.py   # 语音输入热键测试
 ```
 
-#### 5. 验证
-
-```bash
-# 实时看 heartbeat 日志
-node watchdog/heartbeat-tail.mjs --follow
-
-# 或者用 npm scripts
-npm run tail
-```
-
-如果看到 `[启动] heartbeat 已启动` + `[连接] 找到 oc @ 127.0.0.1:8207` + `✓ heartbeat 就绪`，就成功了。
-
-### 核心概念
-
-#### Heartbeat 心跳机制
-
-**默认 3 分钟一次心跳**，向当前 oc 对话注入一条 `[heartbeat] {time}` 消息。模型只需要知道"带 [heartbeat] 前缀的就是 heartbeat 发来的消息"即可。
-
-**配置心跳间隔**（编辑 `config/presets.json`）：
-
-```json
-{
-  "timer": {
-    "enabled": true,
-    "intervalMs": 180000,
-    "message": "[heartbeat] {time}"
-  }
-}
-```
-
-**禁用心跳**：设 `"enabled": false`，heartbeat 不再主动注入（仍可手动触发）。
-
-#### 主动唤醒 OC
-
-通过 MCP 工具 `heartbeat_inject_intent` 唤醒 OC 做长期任务：
-
-```python
-# 你的 oc agent 可以这样调用：
-heartbeat_inject_intent(
-  text="去扫描 furina 项目还有什么可优化的",
-  intent="self-direct",   # 告诉 oc 这是自己派的任务
-  source="oc"             # 标记来源
-)
-```
-
-**intent 选项**：
-- `survival` — 续命消息（heartbeat 拉起新 oc 后自动注入"你醒了"）
-- `auto-recall` — 自动恢复上下文（带历史摘要回灌）
-- `self-direct` — oc 派给自己的任务（默认）
-- `koko` — 用户注入的纯消息（无标签）
-- `user` — 默认用户消息
-- `system` — 系统级通知
-- `custom` — 自定义
-
-#### 锁定对话
-
-**自动锁定**：heartbeat 启动时自动绑定到 Koko 当前对话（通过 `logs/session.lock` 持久化）。重启 heartbeat 后会自动恢复绑定。
-
-**手动切换对话**（通过 MCP）：
-
-```python
-# 列出所有 oc 对话
-sessions()
-
-# 切换到指定对话
-session_switch(sessionId="ses_xxx")
-```
-
-**通过 control.json 热控制**：
-
-```bash
-echo '{"cmd": "switch-session", "sessionId": "ses_xxx"}' > control.json
-```
-
-#### 配置调用模型
-
-通过 MCP 工具 `providers` 查看可用模型：
-
-```python
-providers()  # 返回所有 provider + model 列表
-```
-
-**heartbeat 本身不调用模型**（它是注入框架不是对话框架），模型调用由 oc 自己负责。heartbeat 注入消息后由 oc 处理。
-
-#### 异步长期任务
-
-**场景**：Koko 离开 5 小时，让 oc 继续工作。
-
-**配置** `config/presets.json`：
-
-```json
-{
-  "timer": {
-    "enabled": true,
-    "intervalMs": 180000,  // 3 分钟一次
-    "message": "[heartbeat] 检查 furina 项目状态，寻找可优化点；如有进展请写日志。"
-  }
-}
-
-heartbeat 会每 3 分钟唤醒 oc，oc 决定是否工作（如果不工作就回复简短状态）。
-
-### MCP 工具清单
-
-heartbeat 提供 23 个 MCP 工具（2 个独立 + 21 个子命令）：
-
-#### 独立工具
-
-| 工具名 | 用途 |
-|--------|------|
-| `heartbeat_call` | 元工具，调用 21 个子命令 |
-| `heartbeat_inject_intent` | 自由控制注入（silent 模式） |
-
-#### 子命令（通过 heartbeat_call 调）
-
-| 类别 | 工具 | 用途 |
-|------|------|------|
-| **状态** | `status` / `heartbeat` / `presets` | 查看运行状态 |
-| **对话管理** | `sessions` / `session_create` / `session_messages` / `session_send` / `session_switch` | 管理 oc 对话 |
-| **agent 集群** | `cluster_create` / `cluster_collect` | 批量创建+收集 |
-| **注入与记忆** | `inject` / `recall` / `summarize` / `memory_set` | 注入控制 + 记忆操作 |
-| **工作流预设** | `workflow_list` / `workflow_apply` / `workflow_current` / `workflow_add` | persona 切换 |
-| **配置与迭代** | `set_preset` / `restart_furina` / `restart_oc` | 热改配置 + 重启 |
-| **模型** | `providers` | 查询可用模型 |
-
-**完整参数**详见 `mcp/heartbeat_mcp_server.py` 的 `INJECT_INTENT_DOC`。
-
-### 架构
-
-```
-┌──────────────────────────────────────────────────────┐
-│                   OpenCode 桌面版                     │
-│  ┌──────────────────────────────────────────────┐    │
-│  │  plugins/opencode-bootstrap.mjs              │    │
-│  │  - 启动时泄露密码到 oc-password.txt           │    │
-│  │  - 检查 heartbeat 没跑则拉起                   │    │
-│  └──────────────────────────────────────────────┘    │
-│  ┌──────────────────────────────────────────────┐    │
-│  │  MCP client (oc 通过 mcp 调 heartbeat)        │    │
-│  │  - heartbeat_call (22 子命令)                │    │
-│  │  - heartbeat_inject_intent (silent 注入)     │    │
-│  └──────────────────────────────────────────────┘    │
-└──────────┬───────────────────────────────────────────┘
-           │ HTTP (port=动态, Basic Auth)
-           ↓
-┌──────────────────────────────────────────────────────┐
-│                Opencode Heartbeat 进程               │
-│  ┌──────────────┐  ┌──────────────┐  ┌────────────┐  │
-│  │ 感知层        │  │ 核心区        │  │ 注入区     │  │
-│  │ - file-watch │→ │ - 事件队列    │→ │ - injector │  │
-│  │ - timer      │  │ - 令牌桶      │  │   .inject()│  │
-│  │              │  │ - 调度循环    │  │   .poll()  │  │
-│  └──────────────┘  └──────────────┘  └────────────┘  │
-│                                                       │
-│  ┌──────────────┐  ┌──────────────┐                  │
-│  │ 记忆区        │  │ HTTP server  │                  │
-│  │ - checkpoint │  │ :9999        │                  │
-│  │ - recall     │  │ (供 mcp 调)  │                  │
-│  └──────────────┘  └──────────────┘                  │
-│                                                       │
-│  ┌──────────────────────────────────────────────┐    │
-│  │  health monitor (15s tick)                    │    │
-│  │  - 探测 oc 进程 + 端口                         │    │
-│  │  - oc 死 → spawnOC + 25s 注入"你醒了"         │    │
-│  └──────────────────────────────────────────────┘    │
-└──────────────────────────────────────────────────────┘
-           ↑                               ↑
-           │ 控制命令                        │ 实时日志
-           │ control.json                    │ heartbeat-tail
-           ↓                               ↓
-       任何外部进程                      任何 terminal
-```
-
-### 配置文件
-
-#### `config/default.json`
-
-```json
-{
-  "eventQueue": { "maxBurst": 10, "refillRate": 5, "hourlyLimit": 200 },
-  "injector": { "pollIntervalMs": 2000, "pollTimeoutMs": 180000 },
-  "memory": { "maxMessages": 40, "maxTokens": 30000 },
-  "sensors": {
-    "fileWatcher": { "paths": ["."], "debounceMs": 1000 }
-  }
-}
-```
-
-#### `config/presets.json`（运行时可改）
-
-```json
-{
-  "mode": "observe",
-  "timer": {
-    "enabled": true,
-    "intervalMs": 30000,
-    "message": "[heartbeat] 你还好吗？",
-    "priority": 20
-  },
-  "healthCheck": {
-    "staleStateMs": 120000,
-    "pokeIntervalMs": 60000,
-    "maxPokeRounds": 2
-  }
-}
-```
-
-#### `~/.config/opencode/opencode.jsonc`（oc 配置）
-
-```json
-{
-  "plugin": ["./plugins/opencode-bootstrap.mjs"],
-  "mcp": {
-    "heartbeat": {
-      "type": "local",
-      "command": ["python", "<abs-path>\\mcp\\heartbeat_mcp_server.py"],
-      "enabled": true
-    }
-  }
-}
-```
-
-### 命令行用法
-
-```bash
-# 主进程
-node src/main.mjs --watch <path> --session <sessionId>
-
-# 实时日志（中文友好）
-node watchdog/heartbeat-tail.mjs --follow
-
-# 看最近 50 行
-node watchdog/heartbeat-tail.mjs --no-follow --lines 50
-
-# 只看注入消息
-node watchdog/heartbeat-tail.mjs --filter "[injector]"
-
-# 英文模式
-node watchdog/heartbeat-tail.mjs --lang en
-
-# 控制通道（热控制）
-echo '{"cmd": "status"}' > control.json
-echo '{"cmd": "inject", "text": "hello"}' > control.json
-echo '{"cmd": "switch-session", "sessionId": "ses_xxx"}' > control.json
-```
-
-### 故障排查
-
-| 症状 | 原因 | 解决 |
-|------|------|------|
-| `[错误] 找不到 OpenCode.exe` | oc 没装或路径不对 | 装 oc 桌面版，路径在 `src/injector.mjs` `spawnOC` 修改 |
-| `[健康失败] 密码匹配超时` | 密码文件过期 | 重启 oc（plugin 会重新泄露） |
-| `[队列!] 丢弃: hourly_limit` | 触发频率太高 | 调大 `eventQueue.hourlyLimit` |
-| `silentInject 失败: fetch failed` | oc 端点瞬时无响应 | 已加重试（v0.5.1+），会自动恢复 |
-| heartbeat 死了拉不起 | 没有兜底进程 | 重启 oc → plugin 拉起 heartbeat |
-
-### 已知限制
-
-1. **heartbeat 死亡自愈依赖 oc 重启**：heartbeat 是单进程，死了没法自愈（health monitor 在进程内）。Koko 需手动重启 oc 触发 `opencode-bootstrap` 拉起。
-2. **silent inject 仍是 oc 视角消息**：所有注入都会进入 oc 对话历史，silent 只是不写 heartbeat 记忆区。
-3. **agent 集群是"多 session 并发"不是"多 agent 协作"**：每个 agent 独立思考，结果由 Koko 或 oc 整合。
-
-### 设计哲学
-
-> "furina 不是调度系统，不是多 agent 框架。furina 是心脏——让你活得更久。"
-
-- ❌ **不是**：调度多 agent、AGI 框架、让模型自己找事干
-- ✅ **是**：延长 agent 生命周期、跨对话记忆继承、自动复活、异步任务执行
-
-源动力来自 [冬蕴雪对话实验](docs/)——一个关于"AI 是否能延续自己工作流"的长期实验。
-
----
-
-## English
-
-### What is this
-
-**Opencode Heartbeat** is an external meta-logic daemon that pairs with OpenCode desktop. It solves the most fundamental pain points of AI agents:
-
-- **What was I doing?** → Cross-conversation memory inheritance
-- **What can I do while Koko is away?** → Async long-running tasks
-- **OC crashed, what now?** → Auto-respawn + resurrection inject
-- **I forgot who I was?** → Persona continuity (self-description + memory checkpoints)
-
-**Core positioning**: heartbeat is NOT a "multi-agent scheduler" or "AGI framework". It's a **heart that lets a single agent live longer** — give it periodic pulses, a memory bank, and auto-revive capability.
-
-### 5-minute Quick Start
-
-```bash
-git clone https://github.com/dyx3364738934-dev/The-Opencode-Heartbeat.git
-cd The-Opencode-Heartbeat
-npm install
-
-# Install bootstrap plugin
-cp plugins/opencode-bootstrap.mjs ~/.config/opencode/plugins/
-
-# Configure MCP in ~/.config/opencode/opencode.jsonc
-# (see Chinese section above for details)
-
-# Start OpenCode desktop — heartbeat auto-starts via plugin
-# OR manually: node src/main.mjs --watch ~/Desktop
-
-# Watch heartbeat logs
-node watchdog/heartbeat-tail.mjs --follow
-```
-
-### Core Concepts
-
-- **Heartbeat**: Default 30s interval. Injects `[heartbeat] ...` into current OC session. Model just needs to recognize this prefix as "heartbeat is talking".
-- **Wake OC for long tasks**: Use `heartbeat_inject_intent` with `intent="self-direct"`.
-- **Lock session**: Auto-locked to Koko's current session via `logs/session.lock`. Manual switch via `session_switch(sessionId)`.
-- **Async long-running**: Set `timer.intervalMs` in presets. Heartbeat wakes OC every N minutes; OC decides whether to work.
-- **MCP tools**: 23 total (2 standalone + 21 sub-commands). See [MCP tools section](#mcp-工具清单) (Chinese) above.
-
-### Architecture
-
-See [架构 diagram above](#架构).
-
-### License
-
-MIT
-
-### Credits
-
-Built by Koko & 冬蕴雪 (MiniMax M3). The 冬蕴雪 self-dialogue experiment is the source of all design decisions.
+单测覆盖：
+- injector 公共 API / session 选择 / 绑定 / 多端口
+- lifeline 运行时
+- session-binding-store
+- sidecar-registry
+- timer 消息渲染
+- heartbeat 模板渲染器
+- MCP 能力守卫
+
+## 文档
+
+- [架构](docs/ARCHITECTURE.md)
+- [术语表](docs/GLOSSARY.md)
+- [v0.10 路线图](docs/v0.10-roadmap.md)
+- [重构计划](docs/REFACTOR-PLAN.md)
+- [CHANGELOG](CHANGELOG.md)
+
+## 设计理念
+
+- **被动等待 > 主动打扰**：心跳是对话停滞信号，不是定时骚扰
+- **真实数据 > 措辞扰动**：每次心跳 token 不一样靠真实环境采样，不靠同义词替换
+- **可见 > 隐藏**：korina 必须在可见 cmd 窗口跑，Alt+Tab 能切到看实时日志
+- **强约束启动**：必须用 `start.ps1` / `korina.ps1 start`，不能用 hidden 模式（破坏 sidecar）
+- **单一信号源**：AI 回复完成是"在思考"的唯一有效信号，不堆叠多源判断
+
+## 已知限制
+
+- 仅支持 Windows（依赖 PowerShell + Win32 API）
+- SSE 监听依赖 Opencode `/global/event` 端点（v0.3+ 协议）
+- 心跳不能区分"睡着"和"不在"（都是长时间无操作）
+- MiniMax TTS 是默认 provider（其他 TTS 需自己适配 `src/tts.mjs`）
+
+## 许可证
+
+[MIT](LICENSE) © 2026 Koko & 冬蕴雪
+
+## 致谢
+
+- [Opencode](https://github.com/sst/opencode) — AI 编码助手桌面版
+- [MiniMax](https://api.minimaxi.com) — TTS 服务
+- [OpenAI Whisper](https://github.com/openai/whisper) — 语音识别
+- [pygame](https://www.pygame.org) — 桌面歌词浮窗
+- [chokidar](https://github.com/paulmillr/chokidar) — 文件监听

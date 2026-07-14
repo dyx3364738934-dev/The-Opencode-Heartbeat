@@ -2,6 +2,18 @@
 
 All notable changes to Opencode Heartbeat are documented here.
 
+## [0.9.3] - 2026-07-11
+
+### Fixed
+
+- **sidecar forrtl: error 200 MKL crash** (sidecar-launcher) — Python sidecars crashed when korina's terminal closed because Windows broadcasts CTRL_CLOSE_EVENT to all children in the console group. Fix: spawn with `detached: true` + `unref()` + `creationFlags: CREATE_NEW_PROCESS_GROUP` (0x200) so children don't receive the close event. Sidecars now survive korina kill and can be reused on restart.
+- **Zombie sidecar accumulation** (sidecar-launcher) — without PID tracking, each korina restart would spawn new sidecars while old ones leaked. Fix: write PID files at spawn time, kill old PID before launching new one.
+- **Missing `readFileSync`/`writeFileSync` import** — fixed to support PID file tracking.
+
+### Changed
+
+- **Sidecar window hidden** (`windowsHide: true`) — Python sidecars no longer pop up a console window on startup.
+
 ## [0.7.10.1-beta] - 2026-07-10
 
 ### Added

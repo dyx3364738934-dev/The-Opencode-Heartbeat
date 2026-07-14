@@ -11,15 +11,15 @@
  * 汇报文件存到 logs/work-reports/work-report-YYYYMMDD-HHMMSS.md
  */
 
-import { writeFileSync, mkdirSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, readFileSync, readdirSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, "..");
 const REPORTS_DIR = join(PROJECT_ROOT, "logs", "work-reports");
-const LOG_FILE = join(PROJECT_ROOT, "logs", "furina-main.log");
-const ERR_FILE = join(PROJECT_ROOT, "logs", "furina-main.err");
+const LOG_FILE = join(PROJECT_ROOT, "logs", "korina-live.log");
+const ERR_FILE = join(PROJECT_ROOT, "logs", "korina-stderr.log");
 const HEARTBEAT_FILE = join(PROJECT_ROOT, "logs", "heartbeat.json");
 
 export class WorkLog {
@@ -29,12 +29,15 @@ export class WorkLog {
     this._lastReportTime = Date.now();
     this._eventBuffer = []; // 收集事件
     this._reportCount = 0;
+    // v0.8.7: 修复 #22 -- 增量读取日志（避免长时间运行后全量读数十 MB 日志文件）
+    this._logReadOffset = 0;
+    this._errReadOffset = 0;
   }
 
   start() {
     if (this._timer) return;
     // 确保目录存在
-    if (!existsSync(REPORTS_DIR)) mkdirSync(REPORTS_DIR, { recursive: true });
+    try { if (!existsSync(REPORTS_DIR)) mkdirSync(REPORTS_DIR, { recursive: true }); } catch (e) { console.warn(`[worklog] 创建目录失败: ${e.message}`); }
     this._timer = setInterval(() => this.generateReport(), this.intervalMs);
     console.log(`[worklog] 工作汇报系统已启动 (interval=${this.intervalMs / 1000}s)`);
   }
@@ -104,19 +107,29 @@ export class WorkLog {
   }
 
   /**
-   * 从 furina-main.log 提取这段时间的事件
+   * 从 korina-live.log 提取这段时间的事件
    */
   _extractLogEvents(periodStart, periodEnd) {
     if (!existsSync(LOG_FILE)) return [];
     try {
-      const content = readFileSync(LOG_FILE, "utf-8");
+      // v0.8.7: 修复 #22 -- 增量读取（从上次偏移量开始，避免全量读大文件）
+      const stat = statSync(LOG_FILE);
+      const offset = Math.min(this._logReadOffset, stat.size);
+      const len = stat.size - offset;
+      if (len <= 0) return [];
+      const fd = openSync(LOG_FILE, "r");
+      const buf = Buffer.alloc(len);
+      readSync(fd, buf, 0, len, offset);
+      closeSync(fd);
+      this._logReadOffset = stat.size;
+      const content = buf.toString("utf-8");
       const lines = content.split("\n").filter((l) => l.trim());
 
       // 提取关键事件行（注入、拉起、密码匹配、端口变化、续命等）
       const keywords = [
         "注入", "续命", "拉起", "密码匹配", "端口变化", "oc 重启",
         "oc 进程不在线", "重新匹配", "health check", "dispatch",
-        "furina 启动", "furina 就绪", "HTTP server",
+        "korina 启动", "korina 就绪", "HTTP server",
       ];
 
       return lines
@@ -128,12 +141,22 @@ export class WorkLog {
   }
 
   /**
-   * 从 furina-main.err 提取错误事件
+   * 从 korina-stderr.log 提取错误事件
    */
   _extractErrEvents(periodStart, periodEnd) {
     if (!existsSync(ERR_FILE)) return [];
     try {
-      const content = readFileSync(ERR_FILE, "utf-8");
+      // v0.8.7: 修复 #22 -- 增量读取
+      const stat = statSync(ERR_FILE);
+      const offset = Math.min(this._errReadOffset, stat.size);
+      const len = stat.size - offset;
+      if (len <= 0) return [];
+      const fd = openSync(ERR_FILE, "r");
+      const buf = Buffer.alloc(len);
+      readSync(fd, buf, 0, len, offset);
+      closeSync(fd);
+      this._errReadOffset = stat.size;
+      const content = buf.toString("utf-8");
       return content.split("\n").filter((l) => l.trim()).slice(-50);
     } catch {
       return [];
@@ -160,15 +183,15 @@ export class WorkLog {
       ocRestarts: 0,
       passwordMatches: 0,
       healthCheckFails: 0,
-      furinaRestarts: 0,
+      korinaRestarts: 0,
     };
 
     for (const line of logEvents) {
       if (line.includes("续命消息已注入")) summary.successfulInjections++;
-      if (line.includes("注入失败") || line.includes("注入失败")) summary.failedInjections++;
+      if (line.includes("注入失败") || line.includes("inject 失败")) summary.failedInjections++;
       if (line.includes("端口变化")) summary.ocRestarts++;
       if (line.includes("密码匹配成功")) summary.passwordMatches++;
-      if (line.includes("furina 启动")) summary.furinaRestarts++;
+      if (line.includes("korina 启动")) summary.korinaRestarts++;
     }
     for (const line of errEvents) {
       if (line.includes("health check failed")) summary.healthCheckFails++;
@@ -181,7 +204,7 @@ export class WorkLog {
   _buildMarkdown(ctx) {
     const { periodStart, periodEnd, periodMinutes, stats, eventStats, logEvents, errEvents, bufferEvents } = ctx;
 
-    let md = `# furina 工作汇报\n\n`;
+    let md = `# korina 工作汇报\n\n`;
     md += `**汇报周期**: ${periodStart} ~ ${periodEnd} (${periodMinutes} 分钟)\n`;
     md += `**生成时间**: ${new Date().toISOString()}\n`;
     md += `**累计汇报数**: ${stats.reports}\n\n`;
@@ -193,7 +216,7 @@ export class WorkLog {
     md += `| 续命注入成功 | ${eventStats.successfulInjections} |\n`;
     md += `| 注入失败 | ${eventStats.failedInjections} |\n`;
     md += `| health check 失败 | ${eventStats.healthCheckFails} |\n`;
-    md += `| furina 重启 | ${eventStats.furinaRestarts} |\n\n`;
+    md += `| korina 重启 | ${eventStats.korinaRestarts} |\n\n`;
 
     if (stats.heartbeat) {
       md += `## 心跳状态\n\n`;
